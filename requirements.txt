@@ -1,0 +1,6 @@
+torch
+transformers>=4.37.0
+pillow
+accelerate
+tqdm
+huggingface_hub

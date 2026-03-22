@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Model weights (usually large files)
+model/
+*.bin
+*.safetensors
+
+# Output data
+*.json
+!example.json
+
+# IDE
+.vscode/
+.idea/
