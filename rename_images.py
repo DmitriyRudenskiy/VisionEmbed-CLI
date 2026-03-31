@@ -2,10 +2,11 @@ import os
 import sys
 import shutil
 import re
+import argparse
 from PIL import Image
 
 
-def process_images(source_dir):
+def process_images(source_dir, recursive=False):
     # Проверяем, существует ли директория
     if not os.path.exists(source_dir):
         print(f"Ошибка: Директория '{source_dir}' не найдена.")
@@ -16,32 +17,54 @@ def process_images(source_dir):
 
     # Папка для оригиналов
     backup_dir_name = "___!ORIGINAL_IMAGE"
-    backup_dir_path = os.path.join(source_dir, backup_dir_name)
 
     # Регулярное выражение для определения уже обработанных файлов
-    # Формат: числа_7цифр.jpg (например, 1698765432_0000001.jpg)
     processed_pattern = re.compile(r"^\d+_\d{7}\.jpg$", re.IGNORECASE)
 
     files_data = []
 
-    print("Сканирование файлов...")
-    for filename in os.listdir(source_dir):
-        full_path = os.path.join(source_dir, filename)
+    print(f"Сканирование файлов (Рекурсивно: {recursive})...")
 
-        # Пропускаем папки (в том числе нашу папку для оригиналов)
-        if os.path.isdir(full_path):
-            continue
+    # Логика сканирования зависит от флага recursive
+    if recursive:
+        # os.walk проходит по всем вложенным папкам
+        for root, dirs, files in os.walk(source_dir):
+            # Исключаем папку с бэкапами из обхода, чтобы не обрабатывать их повторно
+            if backup_dir_name in dirs:
+                dirs.remove(backup_dir_name)
 
-        # Пропускаем файлы, которые уже были обработаны этим скриптом
-        if processed_pattern.match(filename):
-            continue
+            for filename in files:
+                full_path = os.path.join(root, filename)
 
-        if filename.lower().endswith(valid_extensions):
-            try:
-                creation_time = os.path.getctime(full_path)
-                files_data.append((creation_time, full_path, filename))
-            except OSError as e:
-                print(f"Не удалось прочитать дату создания файла {filename}: {e}")
+                # Пропускаем файлы, которые уже были обработаны
+                if processed_pattern.match(filename):
+                    continue
+
+                if filename.lower().endswith(valid_extensions):
+                    try:
+                        creation_time = os.path.getctime(full_path)
+                        # Добавляем root, чтобы знать, в какой папке находится файл
+                        files_data.append((creation_time, full_path, filename, root))
+                    except OSError as e:
+                        print(f"Не удалось прочитать дату создания файла {filename}: {e}")
+    else:
+        # Стандартный нерекурсивный обход (как было изначально)
+        for filename in os.listdir(source_dir):
+            full_path = os.path.join(source_dir, filename)
+
+            if os.path.isdir(full_path):
+                continue
+
+            if processed_pattern.match(filename):
+                continue
+
+            if filename.lower().endswith(valid_extensions):
+                try:
+                    creation_time = os.path.getctime(full_path)
+                    # Передаем source_dir как папку назначения
+                    files_data.append((creation_time, full_path, filename, source_dir))
+                except OSError as e:
+                    print(f"Не удалось прочитать дату создания файла {filename}: {e}")
 
     if not files_data:
         print("Нет новых изображений для обработки.")
@@ -50,14 +73,9 @@ def process_images(source_dir):
     # Сортировка от ранних к поздним
     files_data.sort(key=lambda x: x[0])
 
-    # Создаем папку для оригиналов, если её нет
-    if not os.path.exists(backup_dir_path):
-        os.makedirs(backup_dir_path)
-        print(f"Создана папка для оригиналов: {backup_dir_path}")
-
     print(f"Найдено {len(files_data)} изображений. Начинаю обработку...")
 
-    for index, (ctime, filepath, old_name) in enumerate(files_data):
+    for index, (ctime, filepath, old_name, file_dir) in enumerate(files_data):
         try:
             # Формируем Unix Timestamp
             timestamp_str = str(int(ctime))
@@ -68,8 +86,16 @@ def process_images(source_dir):
             # Новое имя файла
             new_filename = f"{timestamp_str}_{serial_number}.jpg"
 
-            # Путь для нового файла (в той же директории, что и оригинал)
-            output_path = os.path.join(source_dir, new_filename)
+            # Путь для нового файла (в той же директории, где лежит оригинал)
+            output_path = os.path.join(file_dir, new_filename)
+
+            # Папка для оригиналов (создается в той же директории, где лежит оригинал)
+            backup_dir_path = os.path.join(file_dir, backup_dir_name)
+
+            # Создаем папку для оригиналов, если её нет
+            if not os.path.exists(backup_dir_path):
+                os.makedirs(backup_dir_path)
+                # print(f"Создана папка для оригиналов: {backup_dir_path}")
 
             # Конвертация и сохранение
             with Image.open(filepath) as img:
@@ -87,7 +113,6 @@ def process_images(source_dir):
 
             # Проверка на случай, если файл с таким именем уже есть в папке оригиналов
             if os.path.exists(original_move_path):
-                # Если вдруг совпало имя, добавляем суффикс, чтобы не потерять файл
                 base, ext = os.path.splitext(old_name)
                 counter = 1
                 while os.path.exists(os.path.join(backup_dir_path, f"{base}_{counter}{ext}")):
@@ -95,7 +120,7 @@ def process_images(source_dir):
                 original_move_path = os.path.join(backup_dir_path, f"{base}_{counter}{ext}")
 
             shutil.move(filepath, original_move_path)
-            print(f"[ПЕРЕМЕЩЕН] {old_name} -> {backup_dir_name}/")
+            # print(f"[ПЕРЕМЕЩЕН] {old_name} -> {backup_dir_name}/")
 
         except Exception as e:
             print(f"[ОШИБКА] Не удалось обработать {old_name}: {e}")
@@ -104,9 +129,19 @@ def process_images(source_dir):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Использование: python rename_images.py <путь_к_папке>")
-        print("Пример: python rename_images.py C:\\Users\\User\\Pictures")
-    else:
-        input_dir = sys.argv[1]
-        process_images(input_dir)
+    # Настройка парсера аргументов
+    parser = argparse.ArgumentParser(description="Переименование и конвертация изображений.")
+
+    parser.add_argument(
+        "path",
+        help="Путь к папке с изображениями"
+    )
+    parser.add_argument(
+        "-r", "--recursive",
+        action="store_true",
+        help="Включить рекурсивный обход вложенных папок (по умолчанию выключен)"
+    )
+
+    args = parser.parse_args()
+
+    process_images(args.path, args.recursive)
