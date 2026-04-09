@@ -1,32 +1,64 @@
 #!/usr/bin/env python3
 """
-NSFW Image Detection Script (Final Version)
-Вывод: path, nsfw_score (полная точность). Поле error только при ошибке.
+NSFW Image Detection Script (Simplified)
+Использование: python script.py <path>
 """
 
-import argparse
+import gc
 import json
 import logging
+import signal
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Generator, List, Optional, Protocol, Tuple, TypedDict, Union, cast
 
 from PIL import Image
 from tqdm import tqdm
 
-# Попытка импорта torch для определения устройства
-try:
-    import torch
 
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    torch = None
+# Type definitions
+class PredictionItem(TypedDict):
+    label: str
+    score: float
 
-from transformers import pipeline
 
-# Настройка логирования (в stderr)
+class SuccessResult(TypedDict):
+    path: str
+    nsfw_score: float
+
+
+class ErrorResult(TypedDict):
+    path: str
+    error: str
+
+
+ResultType = Union[SuccessResult, ErrorResult]
+
+
+class ClassifierProtocol(Protocol):
+    def __call__(self, images: List[Image.Image]) -> List[List[PredictionItem]]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingResult:
+    path: Path
+    nsfw_score: Optional[float] = None
+    error: Optional[str] = None
+
+    def to_dict(self) -> ResultType:
+        if self.error:
+            return ErrorResult(path=str(self.path), error=self.error)
+        return SuccessResult(path=str(self.path), nsfw_score=cast(float, self.nsfw_score))
+
+
+# Constants
+DEFAULT_MODEL = "Falconsai/nsfw_image_detection"
+BATCH_SIZE = 4
+VALID_EXTENSIONS = frozenset({'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'})
+
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -35,199 +67,215 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_NAME = "Falconsai/nsfw_image_detection"
-VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'}
-DEFAULT_BATCH_SIZE = 4
+# Graceful shutdown
+_shutdown_requested = False
 
 
-def get_image_files(path: Path) -> List[Path]:
-    """Поиск изображений."""
-    if path.is_file():
-        if path.suffix.lower() in VALID_EXTENSIONS:
-            return [path]
-        return []
-
-    if path.is_dir():
-        files = []
-        try:
-            for item in path.iterdir():
-                if item.is_file() and item.suffix.lower() in VALID_EXTENSIONS:
-                    files.append(item)
-        except PermissionError:
-            logger.warning(f"Нет прав на чтение директории: {path}")
-        return sorted(files)
-
-    return []
+def signal_handler(signum: int, frame) -> None:
+    global _shutdown_requested
+    logger.warning(f"\n⚠️  Завершение работы...")
+    _shutdown_requested = True
 
 
-def load_classifier(model_path: Optional[str], device: str, retries: int = 3) -> Any:
-    """Загрузка модели."""
-    classifier = None
-
-    if model_path and Path(model_path).exists():
-        logger.info(f"📂 Загрузка локальной модели: {model_path}")
-        try:
-            classifier = pipeline("image-classification", model=model_path, device=device)
-            logger.info("✅ Локальная модель загружена.")
-            return classifier
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка локальной модели: {e}. Пробуем HF...")
-
-    logger.info(f"🌐 Загрузка модели {DEFAULT_MODEL_NAME}...")
-
-    for attempt in range(retries):
-        try:
-            classifier = pipeline("image-classification", model=DEFAULT_MODEL_NAME, device=device)
-            logger.info("✅ Модель загружена успешно.")
-            return classifier
-        except Exception as e:
-            logger.warning(f"⚠️ Попытка {attempt + 1}/{retries} не удалась: {e}")
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-            else:
-                logger.critical("❌ Не удалось загрузить модель.")
-                sys.exit(1)
-    return classifier
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 
-def process_batch(classifier: Any, images_data: List[Tuple], threshold: float) -> List[Dict]:
-    """Обработка батча изображений."""
-    if not images_data:
-        return []
-
-    valid_data = [(p, img) for p, img in images_data if img is not None]
-    paths = [item[0] for item in valid_data]
-    pil_images = [item[1] for item in valid_data]
-
-    results = []
-    predictions = []
-    error_msg = None
-
-    if valid_data:
-        try:
-            predictions = classifier(pil_images)
-        except Exception as e:
-            logger.error(f"Ошибка инференса: {e}")
-            predictions = [None] * len(valid_data)
-            error_msg = str(e)
-
-        for idx, (path, _) in enumerate(valid_data):
-            if error_msg:
-                results.append({
-                    "path": str(path),
-                    "error": f"Inference error: {error_msg}"
-                })
-                continue
-
-            preds = predictions[idx]
-            nsfw_score = 0.0
-            if preds:
-                for item in preds:
-                    if item.get('label', '').lower() == 'nsfw':
-                        nsfw_score = item.get('score', 0.0)
-                        break
-
-            # Выводим score без округления
-            results.append({
-                "path": str(path),
-                "nsfw_score": nsfw_score
-            })
-
-    # Файлы с ошибкой загрузки
-    for path, img in images_data:
-        if img is None:
-            results.append({
-                "path": str(path),
-                "error": "Image load error"
-            })
-
-    return results
-
-
-def get_device(device_arg: str) -> str:
-    """Определение устройства."""
-    if device_arg != 'auto':
-        return device_arg
-
-    if not TORCH_AVAILABLE:
-        return 'cpu'
-
-    if torch.cuda.is_available():
-        logger.info("🚀 CUDA detected.")
-        return 'cuda'
-
-    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        logger.info("🍎 MPS detected.")
-        return 'mps'
-
+def get_device() -> str:
+    """Автоматическое определение устройства"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            logger.info("🚀 CUDA")
+            return 'cuda'
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            logger.info("🍎 MPS")
+            return 'mps'
+    except ImportError:
+        pass
+    logger.info("💻 CPU")
     return 'cpu'
 
 
+def find_local_model() -> Optional[Path]:
+    """Поиск локальной модели в ./models относительно скрипта"""
+    script_dir = Path(__file__).parent
+    local_path = script_dir / "models"
+    if local_path.exists() and (local_path / "config.json").exists():
+        return local_path
+    return None
+
+
+def load_model() -> ClassifierProtocol:
+    """Загрузка модели (локальной или из HF)"""
+    from transformers import pipeline
+
+    local_model = find_local_model()
+    model_id = str(local_model) if local_model else DEFAULT_MODEL
+
+    if local_model:
+        logger.info(f"📂 Локальная модель: {local_model}")
+    else:
+        logger.info(f"🌐 Загрузка из HF: {DEFAULT_MODEL}")
+
+    device = get_device()
+
+    for attempt in range(3):
+        try:
+            classifier = pipeline(
+                "image-classification",
+                model=model_id,
+                device=device,
+                batch_size=BATCH_SIZE
+            )
+            logger.info("✅ Модель загружена")
+            return cast(ClassifierProtocol, classifier)
+        except Exception as e:
+            logger.warning(f"⚠️ Попытка {attempt + 1}/3: {e}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+
+    raise RuntimeError("Не удалось загрузить модель")
+
+
+def get_images(path: Path) -> Generator[Path, None, None]:
+    """Поиск изображений (файл или папка)"""
+    if path.is_file():
+        if path.suffix.lower() in VALID_EXTENSIONS:
+            yield path
+        else:
+            logger.warning(f"Неподдерживаемый формат: {path.suffix}")
+    elif path.is_dir():
+        try:
+            for item in sorted(path.iterdir()):
+                if item.is_file() and item.suffix.lower() in VALID_EXTENSIONS:
+                    yield item
+        except PermissionError:
+            logger.error(f"Нет доступа к директории: {path}")
+    else:
+        raise FileNotFoundError(f"Путь не найден: {path}")
+
+
+def process_batch(classifier: ClassifierProtocol, batch: List[Tuple[Path, Image.Image]]) -> Generator[
+    ProcessingResult, None, None]:
+    """Обработка батча"""
+    if not batch:
+        return
+
+    paths = [p for p, _ in batch]
+    images = [img for _, img in batch]
+
+    try:
+        predictions = classifier(images)
+
+        for path, preds in zip(paths, predictions):
+            if _shutdown_requested:
+                break
+
+            nsfw_score = 0.0
+            for pred in preds:
+                if pred.get('label', '').lower() == 'nsfw':
+                    nsfw_score = pred.get('score', 0.0)
+                    break
+
+            yield ProcessingResult(path=path, nsfw_score=float(nsfw_score))
+
+    except Exception as e:
+        logger.error(f"Ошибка инференса: {e}")
+        for path in paths:
+            yield ProcessingResult(path=path, error=f"Inference error: {e}")
+
+    # Очистка памяти
+    del images
+    gc.collect()
+
+
 def main():
-    parser = argparse.ArgumentParser(description='NSFW Detection')
-    parser.add_argument('path', type=str, help='Путь к файлу или папке')
-    parser.add_argument('--model', type=str, default=None, help='Путь к локальной модели')
-    parser.add_argument('--device', type=str, default='auto', help='cpu, cuda, mps, auto')
-    parser.add_argument('--batch-size', type=int, default=DEFAULT_BATCH_SIZE, help='Размер батча')
-    parser.add_argument('--no-local', action='store_true', help='Игнорировать ./models')
-
-    args = parser.parse_args()
-
-    target_path = Path(args.path)
-    if not target_path.exists():
-        logger.error(f"Путь '{args.path}' не существует")
-        print(json.dumps({"error": f"Path '{args.path}' not found"}))
+    if len(sys.argv) != 2:
+        print(f"Использование: {sys.argv[0]} <path>", file=sys.stderr)
         sys.exit(1)
 
-    model_path = None
-    if not args.no_local:
-        if args.model:
-            model_path = args.model
-        else:
-            local_models_dir = Path(__file__).parent / "models"
-            if local_models_dir.exists():
-                model_path = str(local_models_dir)
+    target_path = Path(sys.argv[1])
 
-    device = get_device(args.device)
-    classifier = load_classifier(model_path, device)
+    # Загрузка модели
+    try:
+        classifier = load_model()
+    except Exception as e:
+        logger.critical(f"Ошибка инициализации: {e}")
+        sys.exit(1)
 
-    image_files = get_image_files(target_path)
+    # Подсчет файлов для прогресса
+    try:
+        files = list(get_images(target_path))
+        total = len(files)
+        file_gen = iter(files)
+    except Exception as e:
+        logger.error(f"Ошибка сканирования: {e}")
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)
 
-    if not image_files:
+    if not files:
         logger.warning("Изображения не найдены")
-        print(json.dumps({"error": "No images found"}))
+        print(json.dumps([]))
         sys.exit(0)
 
-    logger.info(f"Найдено изображений: {len(image_files)}")
+    logger.info(f"Найдено: {total} изображений")
 
-    all_results = []
-    current_batch = []
+    # Потоковая обработка и вывод
+    sys.stdout.write('[\n')
+    first = True
 
-    progress_bar = tqdm(image_files, desc="🔍 Обработка", file=sys.stderr, unit="img")
+    batch: List[Tuple[Path, Image.Image]] = []
+    processed = errors = 0
 
-    for file_path in progress_bar:
-        try:
-            img = Image.open(file_path).convert("RGB")
-            current_batch.append((file_path, img))
-        except Exception as e:
-            logger.warning(f"⚠️ Битый файл {file_path.name}: {e}")
-            all_results.append({
-                "path": str(file_path),
-                "error": f"Load error: {str(e)}"
-            })
-            continue
+    with tqdm(total=total, desc="🔍 Обработка", file=sys.stderr, unit="img") as pbar:
+        for file_path in file_gen:
+            if _shutdown_requested:
+                break
 
-        if len(current_batch) >= args.batch_size:
-            results = process_batch(classifier, current_batch, 0.0)  # threshold не нужен для вывода
-            all_results.extend(results)
-            current_batch = []
+            # Загрузка
+            try:
+                with Image.open(file_path) as img:
+                    batch.append((file_path, img.convert("RGB")))
+            except Exception as e:
+                errors += 1
+                result = ProcessingResult(path=file_path, error=f"Load error: {e}")
+                if not first:
+                    sys.stdout.write(',\n')
+                json.dump(result.to_dict(), sys.stdout, ensure_ascii=False)
+                first = False
+                pbar.update(1)
+                continue
 
-    if current_batch:
-        results = process_batch(classifier, current_batch, 0.0)
-        all_results.extend(results)
+            # Обработка батча
+            if len(batch) >= BATCH_SIZE:
+                for result in process_batch(classifier, batch):
+                    if not first:
+                        sys.stdout.write(',\n')
+                    json.dump(result.to_dict(), sys.stdout, ensure_ascii=False)
+                    first = False
+                    processed += 1
+                    if result.error:
+                        errors += 1
+                pbar.update(len(batch))
+                batch = []
 
-    # ensure_ascii=False для поддержки кириллицы в путях
-    print(json.dumps(all_results, indent=2, ensure_ascii=False))
+        # Остаток
+        if batch and not _shutdown_requested:
+            for result in process_batch(classifier, batch):
+                if not first:
+                    sys.stdout.write(',\n')
+                json.dump(result.to_dict(), sys.stdout, ensure_ascii=False)
+                first = False
+                processed += 1
+                if result.error:
+                    errors += 1
+            pbar.update(len(batch))
+
+    sys.stdout.write('\n]\n')
+    sys.stdout.flush()
+
+    logger.info(f"✅ Готово: {processed} обработано, {errors} ошибок")
 
 
 if __name__ == "__main__":
