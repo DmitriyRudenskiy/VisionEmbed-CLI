@@ -1,139 +1,233 @@
 #!/usr/bin/env python3
 """
-NSFW Image Detection Script
-Автоматически использует локальную папку ./models.
-Выводит результат в формате JSON.
+NSFW Image Detection Script (Final Version)
+Вывод: path, nsfw_score (полная точность). Поле error только при ошибке.
 """
 
 import argparse
-import os
-import sys
 import json
+import logging
+import sys
+import time
 from pathlib import Path
+from typing import List, Optional, Dict, Any, Tuple
+
 from PIL import Image
-from transformers import pipeline
 from tqdm import tqdm
 
+# Попытка импорта torch для определения устройства
+try:
+    import torch
 
-def setup_classifier(model_path=None, retries=3):
-    """Инициализация классификатора."""
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
 
-    # Если указан локальный путь
-    if model_path and os.path.exists(model_path):
-        print(f"📂 Загрузка локальной модели из: {model_path}", file=sys.stderr)
+from transformers import pipeline
+
+# Настройка логирования (в stderr)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stderr,
+    datefmt="%H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
+DEFAULT_MODEL_NAME = "Falconsai/nsfw_image_detection"
+VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'}
+DEFAULT_BATCH_SIZE = 4
+
+
+def get_image_files(path: Path) -> List[Path]:
+    """Поиск изображений."""
+    if path.is_file():
+        if path.suffix.lower() in VALID_EXTENSIONS:
+            return [path]
+        return []
+
+    if path.is_dir():
+        files = []
         try:
-            classifier = pipeline(
-                "image-classification",
-                model=model_path,
-                use_fast=False
-            )
-            print("✅ Локальная модель загружена!\n", file=sys.stderr)
+            for item in path.iterdir():
+                if item.is_file() and item.suffix.lower() in VALID_EXTENSIONS:
+                    files.append(item)
+        except PermissionError:
+            logger.warning(f"Нет прав на чтение директории: {path}")
+        return sorted(files)
+
+    return []
+
+
+def load_classifier(model_path: Optional[str], device: str, retries: int = 3) -> Any:
+    """Загрузка модели."""
+    classifier = None
+
+    if model_path and Path(model_path).exists():
+        logger.info(f"📂 Загрузка локальной модели: {model_path}")
+        try:
+            classifier = pipeline("image-classification", model=model_path, device=device)
+            logger.info("✅ Локальная модель загружена.")
             return classifier
         except Exception as e:
-            print(f"⚠️ Ошибка загрузки локальной модели: {e}", file=sys.stderr)
-            sys.exit(1)
+            logger.warning(f"⚠️ Ошибка локальной модели: {e}. Пробуем HF...")
 
-    # Загрузка из Hugging Face (Fallback)
-    model_name = "Falconsai/nsfw_image_detection"
-    print(f"🌐 Локальная модель не найдена. Загрузка {model_name}...", file=sys.stderr)
+    logger.info(f"🌐 Загрузка модели {DEFAULT_MODEL_NAME}...")
 
     for attempt in range(retries):
         try:
-            classifier = pipeline(
-                "image-classification",
-                model=model_name
-            )
-            print("✅ Модель загружена успешно!\n", file=sys.stderr)
+            classifier = pipeline("image-classification", model=DEFAULT_MODEL_NAME, device=device)
+            logger.info("✅ Модель загружена успешно.")
             return classifier
         except Exception as e:
-            print(f"⚠️ Попытка {attempt + 1}/{retries} не удалась: {e}", file=sys.stderr)
+            logger.warning(f"⚠️ Попытка {attempt + 1}/{retries} не удалась: {e}")
             if attempt < retries - 1:
-                import time
-                time.sleep(5)
+                time.sleep(2 ** attempt)
             else:
-                print("\n❌ Не удалось загрузить модель. Положите файлы в папку './models'.", file=sys.stderr)
+                logger.critical("❌ Не удалось загрузить модель.")
                 sys.exit(1)
+    return classifier
 
 
-def classify_single_image(classifier, image_path):
-    """Классификация одного изображения."""
-    try:
-        img = Image.open(image_path).convert("RGB")
-        result = classifier(img)
-
-        # Ищем оценку для лейбла 'nsfw'
-        nsfw_score = 0.0
-        for item in result:
-            if item['label'] == 'nsfw':
-                nsfw_score = item['score']
-                break
-
-        return {
-            "path": str(image_path),
-            "nsfw": nsfw_score
-        }
-    except Exception as e:
-        return {
-            "path": str(image_path),
-            "error": str(e)
-        }
-
-
-def get_image_files(path):
-    """Получение списка изображений."""
-    valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'}
-
-    if os.path.isfile(path):
-        if Path(path).suffix.lower() in valid_extensions:
-            return [path]
-        else:
-            return []
-
-    elif os.path.isdir(path):
-        images = []
-        for ext in valid_extensions:
-            images.extend(Path(path).glob(f'*{ext}'))
-            images.extend(Path(path).glob(f'*{ext.upper()}'))
-        return sorted(list(set(images)))
-    else:
+def process_batch(classifier: Any, images_data: List[Tuple], threshold: float) -> List[Dict]:
+    """Обработка батча изображений."""
+    if not images_data:
         return []
+
+    valid_data = [(p, img) for p, img in images_data if img is not None]
+    paths = [item[0] for item in valid_data]
+    pil_images = [item[1] for item in valid_data]
+
+    results = []
+    predictions = []
+    error_msg = None
+
+    if valid_data:
+        try:
+            predictions = classifier(pil_images)
+        except Exception as e:
+            logger.error(f"Ошибка инференса: {e}")
+            predictions = [None] * len(valid_data)
+            error_msg = str(e)
+
+        for idx, (path, _) in enumerate(valid_data):
+            if error_msg:
+                results.append({
+                    "path": str(path),
+                    "error": f"Inference error: {error_msg}"
+                })
+                continue
+
+            preds = predictions[idx]
+            nsfw_score = 0.0
+            if preds:
+                for item in preds:
+                    if item.get('label', '').lower() == 'nsfw':
+                        nsfw_score = item.get('score', 0.0)
+                        break
+
+            # Выводим score без округления
+            results.append({
+                "path": str(path),
+                "nsfw_score": nsfw_score
+            })
+
+    # Файлы с ошибкой загрузки
+    for path, img in images_data:
+        if img is None:
+            results.append({
+                "path": str(path),
+                "error": "Image load error"
+            })
+
+    return results
+
+
+def get_device(device_arg: str) -> str:
+    """Определение устройства."""
+    if device_arg != 'auto':
+        return device_arg
+
+    if not TORCH_AVAILABLE:
+        return 'cpu'
+
+    if torch.cuda.is_available():
+        logger.info("🚀 CUDA detected.")
+        return 'cuda'
+
+    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        logger.info("🍎 MPS detected.")
+        return 'mps'
+
+    return 'cpu'
 
 
 def main():
-    parser = argparse.ArgumentParser(description='NSFW Image Detection (JSON Output)')
-    parser.add_argument('path', help='Путь к изображению или папке')
+    parser = argparse.ArgumentParser(description='NSFW Detection')
+    parser.add_argument('path', type=str, help='Путь к файлу или папке')
+    parser.add_argument('--model', type=str, default=None, help='Путь к локальной модели')
+    parser.add_argument('--device', type=str, default='auto', help='cpu, cuda, mps, auto')
+    parser.add_argument('--batch-size', type=int, default=DEFAULT_BATCH_SIZE, help='Размер батча')
+    parser.add_argument('--no-local', action='store_true', help='Игнорировать ./models')
+
     args = parser.parse_args()
 
-    if not os.path.exists(args.path):
-        print(json.dumps({'error': f"Путь '{args.path}' не существует"}))
+    target_path = Path(args.path)
+    if not target_path.exists():
+        logger.error(f"Путь '{args.path}' не существует")
+        print(json.dumps({"error": f"Path '{args.path}' not found"}))
         sys.exit(1)
-
-    image_files = get_image_files(args.path)
-    if not image_files:
-        print(json.dumps({'error': 'Изображения не найдены'}))
-        sys.exit(1)
-
-    # Логика поиска локальной модели
-    script_dir = Path(__file__).parent
-    local_models_dir = script_dir / "models"
 
     model_path = None
-    if local_models_dir.exists():
-        model_path = str(local_models_dir)
+    if not args.no_local:
+        if args.model:
+            model_path = args.model
+        else:
+            local_models_dir = Path(__file__).parent / "models"
+            if local_models_dir.exists():
+                model_path = str(local_models_dir)
 
-    classifier = setup_classifier(model_path=model_path)
+    device = get_device(args.device)
+    classifier = load_classifier(model_path, device)
 
-    results = []
+    image_files = get_image_files(target_path)
 
-    # Используем tqdm для прогресса в stderr, чтобы не мусорить в stdout (JSON)
-    iterator = tqdm(image_files, desc="🔍 Обработка", file=sys.stderr) if len(image_files) > 1 else image_files
+    if not image_files:
+        logger.warning("Изображения не найдены")
+        print(json.dumps({"error": "No images found"}))
+        sys.exit(0)
 
-    for img_path in iterator:
-        result = classify_single_image(classifier, img_path)
-        results.append(result)
+    logger.info(f"Найдено изображений: {len(image_files)}")
 
-    # Вывод результата в JSON
-    print(json.dumps(results, indent=2, default=str))
+    all_results = []
+    current_batch = []
+
+    progress_bar = tqdm(image_files, desc="🔍 Обработка", file=sys.stderr, unit="img")
+
+    for file_path in progress_bar:
+        try:
+            img = Image.open(file_path).convert("RGB")
+            current_batch.append((file_path, img))
+        except Exception as e:
+            logger.warning(f"⚠️ Битый файл {file_path.name}: {e}")
+            all_results.append({
+                "path": str(file_path),
+                "error": f"Load error: {str(e)}"
+            })
+            continue
+
+        if len(current_batch) >= args.batch_size:
+            results = process_batch(classifier, current_batch, 0.0)  # threshold не нужен для вывода
+            all_results.extend(results)
+            current_batch = []
+
+    if current_batch:
+        results = process_batch(classifier, current_batch, 0.0)
+        all_results.extend(results)
+
+    # ensure_ascii=False для поддержки кириллицы в путях
+    print(json.dumps(all_results, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
