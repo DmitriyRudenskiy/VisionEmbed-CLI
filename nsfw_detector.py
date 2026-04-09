@@ -1,24 +1,63 @@
 #!/usr/bin/env python3
 """
-NSFW Image Detection Script (Simplified)
+NSFW Image Detection Script (Optimized & Refactored)
 Использование: python script.py <path>
 """
 
-import gc
 import json
 import logging
 import signal
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generator, List, Optional, Protocol, Tuple, TypedDict, Union, cast
+from typing import (
+    Generator,
+    List,
+    Optional,
+    Protocol,
+    Tuple,  # <--- Исправлено: добавлен Tuple
+    TypedDict,
+    Union,
+    cast,
+    runtime_checkable,
+)
 
 from PIL import Image
 from tqdm import tqdm
 
+# --- Configuration ---
+DEFAULT_MODEL = "Falconsai/nsfw_image_detection"
+BATCH_SIZE = 8
+VALID_EXTENSIONS = frozenset({'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'})
 
-# Type definitions
+# --- Logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stderr,
+    datefmt="%H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
+# --- Graceful Shutdown ---
+_shutdown_requested = False
+
+
+def signal_handler(signum: int, frame) -> None:
+    global _shutdown_requested
+    if not _shutdown_requested:
+        logger.warning("⚠️ Получен сигнал завершения. Сохраняем результаты...")
+    _shutdown_requested = True
+
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
+# --- Type Definitions ---
+
 class PredictionItem(TypedDict):
     label: str
     score: float
@@ -37,6 +76,7 @@ class ErrorResult(TypedDict):
 ResultType = Union[SuccessResult, ErrorResult]
 
 
+@runtime_checkable
 class ClassifierProtocol(Protocol):
     def __call__(self, images: List[Image.Image]) -> List[List[PredictionItem]]: ...
 
@@ -53,141 +93,114 @@ class ProcessingResult:
         return SuccessResult(path=str(self.path), nsfw_score=cast(float, self.nsfw_score))
 
 
-# Constants
-DEFAULT_MODEL = "Falconsai/nsfw_image_detection"
-BATCH_SIZE = 4
-VALID_EXTENSIONS = frozenset({'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff'})
-
-# Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    stream=sys.stderr,
-    datefmt="%H:%M:%S"
-)
-logger = logging.getLogger(__name__)
-
-# Graceful shutdown
-_shutdown_requested = False
-
-
-def signal_handler(signum: int, frame) -> None:
-    global _shutdown_requested
-    logger.warning(f"\n⚠️  Завершение работы...")
-    _shutdown_requested = True
-
-
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
+# --- Helpers ---
 
 def get_device() -> str:
-    """Автоматическое определение устройства"""
+    """Определение устройства для инференса."""
     try:
         import torch
         if torch.cuda.is_available():
-            logger.info("🚀 CUDA")
             return 'cuda'
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            logger.info("🍎 MPS")
             return 'mps'
     except ImportError:
         pass
-    logger.info("💻 CPU")
     return 'cpu'
 
 
 def find_local_model() -> Optional[Path]:
-    """Поиск локальной модели в ./models относительно скрипта"""
-    script_dir = Path(__file__).parent
-    local_path = script_dir / "models"
-    if local_path.exists() and (local_path / "config.json").exists():
+    """Поиск локальной модели."""
+    local_path = Path(__file__).parent / "models"
+    if (local_path / "config.json").exists():
         return local_path
     return None
 
 
 def load_model() -> ClassifierProtocol:
-    """Загрузка модели (локальной или из HF)"""
+    """Загрузка модели с ретраями."""
     from transformers import pipeline
 
-    local_model = find_local_model()
-    model_id = str(local_model) if local_model else DEFAULT_MODEL
-
-    if local_model:
-        logger.info(f"📂 Локальная модель: {local_model}")
-    else:
-        logger.info(f"🌐 Загрузка из HF: {DEFAULT_MODEL}")
-
+    model_path = find_local_model()
+    model_id = str(model_path) if model_path else DEFAULT_MODEL
     device = get_device()
 
+    src = "📂 Локальная" if model_path else "🌐 HuggingFace"
+    logger.info(f"{src} модель: {model_id} | Device: {device.upper()}")
+
+    last_exc = None
     for attempt in range(3):
         try:
-            classifier = pipeline(
+            return pipeline(
                 "image-classification",
                 model=model_id,
                 device=device,
                 batch_size=BATCH_SIZE
             )
-            logger.info("✅ Модель загружена")
-            return cast(ClassifierProtocol, classifier)
         except Exception as e:
-            logger.warning(f"⚠️ Попытка {attempt + 1}/3: {e}")
+            last_exc = e
+            logger.warning(f"Попытка {attempt + 1}/3 не удалась: {e}")
             if attempt < 2:
                 time.sleep(2 ** attempt)
 
-    raise RuntimeError("Не удалось загрузить модель")
+    raise RuntimeError(f"Не удалось загрузить модель: {last_exc}")
 
 
-def get_images(path: Path) -> Generator[Path, None, None]:
-    """Поиск изображений (файл или папка)"""
+def scan_files(path: Path) -> List[Path]:
+    """Сканирование директории или файла."""
     if path.is_file():
-        if path.suffix.lower() in VALID_EXTENSIONS:
-            yield path
-        else:
-            logger.warning(f"Неподдерживаемый формат: {path.suffix}")
-    elif path.is_dir():
-        try:
-            for item in sorted(path.iterdir()):
-                if item.is_file() and item.suffix.lower() in VALID_EXTENSIONS:
-                    yield item
-        except PermissionError:
-            logger.error(f"Нет доступа к директории: {path}")
-    else:
-        raise FileNotFoundError(f"Путь не найден: {path}")
+        return [path] if path.suffix.lower() in VALID_EXTENSIONS else []
+
+    if path.is_dir():
+        files = [p for p in path.rglob('*') if p.is_file() and p.suffix.lower() in VALID_EXTENSIONS]
+        files.sort()
+        return files
+
+    raise FileNotFoundError(f"Путь не найден: {path}")
 
 
-def process_batch(classifier: ClassifierProtocol, batch: List[Tuple[Path, Image.Image]]) -> Generator[
-    ProcessingResult, None, None]:
-    """Обработка батча"""
-    if not batch:
-        return
+@contextmanager
+def json_array_output():
+    """Контекстный менеджер для потокового вывода JSON массива."""
+    sys.stdout.write('[\n')
+    separator = ""
+    try:
+        def write_item(data: dict):
+            nonlocal separator
+            sys.stdout.write(f"{separator}{json.dumps(data, ensure_ascii=False)}")
+            separator = ",\n"
 
-    paths = [p for p, _ in batch]
-    images = [img for _, img in batch]
+        yield write_item
+    finally:
+        sys.stdout.write('\n]\n')
+        sys.stdout.flush()
+
+
+# --- Core Logic ---
+
+def process_batch(
+        classifier: ClassifierProtocol,
+        batch: List[Tuple[Path, Image.Image]]
+) -> List[ProcessingResult]:
+    """Обработка батча изображений."""
+    paths, images = zip(*batch)  # Unzip
 
     try:
-        predictions = classifier(images)
+        predictions = classifier(list(images))
 
+        results = []
         for path, preds in zip(paths, predictions):
-            if _shutdown_requested:
-                break
-
             nsfw_score = 0.0
             for pred in preds:
-                if pred.get('label', '').lower() == 'nsfw':
-                    nsfw_score = pred.get('score', 0.0)
+                if pred['label'].lower() == 'nsfw':
+                    nsfw_score = pred['score']
                     break
-
-            yield ProcessingResult(path=path, nsfw_score=float(nsfw_score))
+            results.append(ProcessingResult(path=path, nsfw_score=float(nsfw_score)))
+        return results
 
     except Exception as e:
+        error_msg = f"Inference error: {e}"
         logger.error(f"Ошибка инференса: {e}")
-        for path in paths:
-            yield ProcessingResult(path=path, error=f"Inference error: {e}")
-
-    # Очистка памяти
-    del images
-    gc.collect()
+        return [ProcessingResult(path=p, error=error_msg) for p in paths]
 
 
 def main():
@@ -197,18 +210,16 @@ def main():
 
     target_path = Path(sys.argv[1])
 
-    # Загрузка модели
+    # 1. Инициализация
     try:
         classifier = load_model()
     except Exception as e:
-        logger.critical(f"Ошибка инициализации: {e}")
+        logger.critical(f"Ошибка инициализации модели: {e}")
         sys.exit(1)
 
-    # Подсчет файлов для прогресса
+    # 2. Сканирование
     try:
-        files = list(get_images(target_path))
-        total = len(files)
-        file_gen = iter(files)
+        files = scan_files(target_path)
     except Exception as e:
         logger.error(f"Ошибка сканирования: {e}")
         print(json.dumps({"error": str(e)}))
@@ -219,63 +230,51 @@ def main():
         print(json.dumps([]))
         sys.exit(0)
 
-    logger.info(f"Найдено: {total} изображений")
+    logger.info(f"Найдено файлов: {len(files)}")
 
-    # Потоковая обработка и вывод
-    sys.stdout.write('[\n')
-    first = True
-
+    # 3. Обработка
+    processed_count = 0
+    error_count = 0
     batch: List[Tuple[Path, Image.Image]] = []
-    processed = errors = 0
 
-    with tqdm(total=total, desc="🔍 Обработка", file=sys.stderr, unit="img") as pbar:
-        for file_path in file_gen:
+    with json_array_output() as write_item, \
+            tqdm(total=len(files), desc="🔍 Обработка", file=sys.stderr, unit="img") as pbar:
+
+        for file_path in files:
             if _shutdown_requested:
                 break
 
-            # Загрузка
             try:
-                with Image.open(file_path) as img:
-                    batch.append((file_path, img.convert("RGB")))
+                img = Image.open(file_path).convert("RGB")
+                batch.append((file_path, img))
             except Exception as e:
-                errors += 1
-                result = ProcessingResult(path=file_path, error=f"Load error: {e}")
-                if not first:
-                    sys.stdout.write(',\n')
-                json.dump(result.to_dict(), sys.stdout, ensure_ascii=False)
-                first = False
+                error_count += 1
+                write_item(ProcessingResult(path=file_path, error=f"Load error: {e}").to_dict())
                 pbar.update(1)
                 continue
 
-            # Обработка батча
             if len(batch) >= BATCH_SIZE:
-                for result in process_batch(classifier, batch):
-                    if not first:
-                        sys.stdout.write(',\n')
-                    json.dump(result.to_dict(), sys.stdout, ensure_ascii=False)
-                    first = False
-                    processed += 1
-                    if result.error:
-                        errors += 1
-                pbar.update(len(batch))
-                batch = []
+                results = process_batch(classifier, batch)
 
-        # Остаток
+                for res in results:
+                    write_item(res.to_dict())
+                    if res.error:
+                        error_count += 1
+
+                processed_count += len(results)
+                pbar.update(len(batch))
+                batch.clear()
+
         if batch and not _shutdown_requested:
-            for result in process_batch(classifier, batch):
-                if not first:
-                    sys.stdout.write(',\n')
-                json.dump(result.to_dict(), sys.stdout, ensure_ascii=False)
-                first = False
-                processed += 1
-                if result.error:
-                    errors += 1
+            results = process_batch(classifier, batch)
+            for res in results:
+                write_item(res.to_dict())
+                if res.error:
+                    error_count += 1
+            processed_count += len(results)
             pbar.update(len(batch))
 
-    sys.stdout.write('\n]\n')
-    sys.stdout.flush()
-
-    logger.info(f"✅ Готово: {processed} обработано, {errors} ошибок")
+    logger.info(f"✅ Готово. Обработано: {processed_count}, Ошибок: {error_count}")
 
 
 if __name__ == "__main__":
