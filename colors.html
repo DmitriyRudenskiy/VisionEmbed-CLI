@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Color Thief Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding: 20px;
+        }
+
+        #inputCard.hidden-block {
+            display: none;
+        }
+
+        .json-input {
+            font-family: monospace;
+            height: 200px;
+        }
+
+        .main-content {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+
+        .preview-image {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            object-fit: cover;
+            max-height: 600px;
+            margin-bottom: 20px;
+        }
+
+        .color-swatch {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            overflow: hidden;
+        }
+
+        .swatch-color {
+            width: 50px;
+            height: 50px;
+            flex-shrink: 0;
+        }
+
+        .swatch-info {
+            padding: 8px 15px;
+            font-size: 14px;
+            width: 100%;
+        }
+
+        .swatch-hex {
+            font-weight: bold;
+            font-family: monospace;
+        }
+
+        /* Диаграмма: обновленные стили */
+        .chart-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .chart-label {
+            width: 80px;
+            font-family: monospace;
+            font-size: 12px;
+            text-align: right;
+            padding-right: 10px;
+            color: #555;
+        }
+
+        .chart-track {
+            flex-grow: 1;
+            background-color: #e9ecef;
+            height: 24px;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .chart-fill {
+            height: 100%;
+            transition: width 0.5s ease;
+            /* Текст убран изнутри полосы, поэтому стили текста здесь не нужны */
+        }
+
+        /* Новый класс для процентов справа */
+        .chart-value {
+            width: 50px; /* Фиксированная ширина для выравнивания */
+            text-align: right;
+            padding-left: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            font-weight: bold;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="row mb-4" id="inputCard">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">Загрузка данных</h5>
+                    <div class="mb-3">
+                        <label for="jsonInput" class="form-label">Вставьте JSON</label>
+                        <textarea class="form-control json-input" id="jsonInput" placeholder='Вставьте сюда JSON из Python скрипта'></textarea>
+                    </div>
+                    <button class="btn btn-primary w-100" onclick="processData()">Построить палитру</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="resultArea" style="display: none;">
+        <div class="row">
+            <div class="col-md-8 mb-4">
+                <div class="main-content">
+                    <img id="previewImage" src="" class="preview-image" alt="Preview">
+
+                    <h6>Распределение цветов</h6>
+                    <div id="barChart"></div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <h5 class="mb-3">Палитра</h5>
+                <div id="swatchContainer"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    function processData() {
+        const jsonText = document.getElementById('jsonInput').value;
+        const inputCard = document.getElementById('inputCard');
+        const resultArea = document.getElementById('resultArea');
+        const swatchContainer = document.getElementById('swatchContainer');
+        const barChart = document.getElementById('barChart');
+        const previewImage = document.getElementById('previewImage');
+
+        try {
+            const data = JSON.parse(jsonText);
+
+            if (!Array.isArray(data) || data.length === 0 || !data[0].colors) {
+                alert("Неверный формат JSON.");
+                return;
+            }
+
+            const item = data[0];
+            const colors = item.colors;
+
+            inputCard.classList.add('hidden-block');
+            previewImage.src = item.filename;
+
+            // Генерируем плашки справа
+            swatchContainer.innerHTML = '';
+            colors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'color-swatch';
+                div.innerHTML = `
+                    <div class="swatch-color" style="background-color: ${color.hex}"></div>
+                    <div class="swatch-info">
+                        <div class="swatch-hex">${color.hex}</div>
+                        <small class="text-muted">${color.percent}%</small>
+                    </div>
+                `;
+                swatchContainer.appendChild(div);
+            });
+
+            // Генерируем диаграмму (проценты вынесены вправо)
+            barChart.innerHTML = '';
+            colors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'chart-row';
+
+                div.innerHTML = `
+                    <div class="chart-label">${color.hex}</div>
+                    <div class="chart-track">
+                        <div class="chart-fill" style="width: ${color.percent}%; background-color: ${color.hex};"></div>
+                    </div>
+                    <div class="chart-value">${color.percent}%</div>
+                `;
+                barChart.appendChild(div);
+            });
+
+            resultArea.style.display = 'block';
+
+        } catch (e) {
+            console.error(e);
+            alert("Ошибка обработки: " + e.message);
+        }
+    }
+</script>
+
+</body>
+</html>
