@@ -5,11 +5,13 @@ import logging
 import argparse
 import signal
 import sys
+import time
 from pathlib import Path
-from typing import Optional, Set, List
-from dataclasses import dataclass, asdict
+from typing import Optional, Set, List, Dict
+from dataclasses import dataclass, asdict, field
 from PIL import Image
 import torch
+from tqdm import tqdm
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 
 # ─── Логирование ───
@@ -26,8 +28,32 @@ logger = logging.getLogger(__name__)
 class ProcessingResult:
     image: str
     prediction: str
-    status: str = "success"
-    error: Optional[str] = None
+    analysis_time_sec: float = 0.0
+    tokens_per_sec: float = 0.0
+
+
+# ─── Единая конфигурация модели ───
+@dataclass
+class ModelConfig:
+    """
+    Класс, содержащий все настройки для загрузки и работы модели.
+    """
+    # Идентификация
+    model_name: str = "Qwen/Qwen3-VL-2B-Thinking"
+
+    # Параметры загрузки
+    device_map: str = "auto"
+    torch_dtype: str = "auto"  # "auto", "float16", "bfloat16", "float32"
+    trust_remote_code: bool = True
+    padding_side: str = "left"  # Важно для батчинга LLM
+
+    # Параметры генерации
+    max_new_tokens: int = 4096
+    do_sample: bool = True
+    temperature: float = 1.0
+    top_p: float = 0.95
+    top_k: int = 20
+    repetition_penalty: float = 1.0
 
 
 # ─── Очистка текста ───
@@ -36,58 +62,93 @@ class TextCleaner:
         self.lowercase = lowercase
         self.remove_thinking = remove_thinking
         self.allowed_pattern = re.compile(r"[^\w\s.,:;!?()\-\[\]\'\"«»„“/]", re.UNICODE)
+        self.thinking_pattern = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.DOTALL | re.IGNORECASE)
 
     def clean(self, raw_text: str) -> str:
         text = raw_text
         if self.remove_thinking:
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+            text = self.thinking_pattern.sub("", text)
+
         cleaned = self.allowed_pattern.sub("", text)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
         if self.lowercase:
             cleaned = cleaned.lower()
         return cleaned
 
 
-# ─── Сканер (синхронный) ───
+# ─── Сканер изображений ───
 def scan_images(directory: Path, extensions: Set[str]) -> List[Path]:
     if not directory.exists():
-        raise FileNotFoundError(f"Directory not found: {directory.resolve()}")
+        raise FileNotFoundError(f"Директория не найдена: {directory.resolve()}")
 
-    images = [
-        p for p in directory.rglob("*")
-        if p.is_file() and p.suffix.lower() in extensions
-    ]
-    return images
+    images = [p for p in directory.rglob("*") if p.is_file() and p.suffix.lower() in extensions]
+    return sorted(images)
 
 
-# ─── Модель (синхронный batch inference) ───
+# ─── Модель ───
 class ModelInference:
-    def __init__(
-        self,
-        model_name: str = "Qwen/Qwen3-VL-2B-Thinking",
-        max_new_tokens: int = 4096,
-    ):
-        logger.info(f"Loading model {model_name}...")
+    def __init__(self, config: ModelConfig):
+        self.config = config
+        logger.info(f"Загрузка модели {config.model_name}...")
+
+        # Маппинг строкового типа в torch dtype
+        dtype_map = {
+            "auto": "auto",
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "float32": torch.float32
+        }
+        torch_dtype = dtype_map.get(config.torch_dtype, "auto")
+
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
-            model_name,
-            dtype="auto",
-            device_map="auto",
-            trust_remote_code=True,
+            config.model_name,
+            torch_dtype=torch_dtype,
+            device_map=config.device_map,
+            trust_remote_code=config.trust_remote_code,
         )
         self.processor = AutoProcessor.from_pretrained(
-            model_name, trust_remote_code=True
+            config.model_name,
+            trust_remote_code=config.trust_remote_code
         )
+
+        # Настройка токенизатора согласно конфигу
+        self.processor.tokenizer.padding_side = config.padding_side
+        if self.processor.tokenizer.pad_token is None:
+            self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
+
         self.model.eval()
-        self.max_new_tokens = max_new_tokens
 
-        self.greedy = False
-        self.top_p = 0.95
-        self.top_k = 20
-        self.repetition_penalty = 1.0
-        self.temperature = 1.0
-        logger.info("Model loaded")
+        # Прогрев модели
+        self._warmup()
 
-    def predict(self, image_paths: List[str], cleaner: TextCleaner) -> List[ProcessingResult]:
+        logger.info(f"Модель загружена (device_map={config.device_map}, padding={config.padding_side})")
+
+    def _warmup(self):
+        """Прогрев модели для исключения влияния холодного старта на тайминги."""
+        logger.info("Прогрев модели (CUDA initialization)...")
+        try:
+            dummy_img = Image.new('RGB', (64, 64), color='black')
+            messages = [[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": dummy_img},
+                        {"type": "text", "text": "Init"},
+                    ],
+                }
+            ]]
+            text = self.processor.apply_chat_template(messages[0], tokenize=False, add_generation_prompt=True)
+            inputs = self.processor(text=[text], images=[dummy_img], return_tensors="pt", padding=True).to(
+                self.model.device)
+
+            with torch.no_grad():
+                _ = self.model.generate(**inputs, max_new_tokens=1)
+            logger.info("Прогрев завершен.")
+        except Exception as e:
+            logger.warning(f"Не удалось выполнить прогрев: {e}")
+
+    def predict(self, image_paths: List[str], prompt_text: str, cleaner: TextCleaner) -> List[ProcessingResult]:
         if not image_paths:
             return []
 
@@ -95,22 +156,13 @@ class ModelInference:
         images: List[Image.Image] = []
         valid_paths: List[str] = []
 
-        # Загружаем изображения
         for path in image_paths:
             try:
                 img = Image.open(path).convert("RGB")
                 images.append(img)
                 valid_paths.append(path)
             except Exception as e:
-                logger.error(f"Failed to load image {path}: {e}")
-                results.append(
-                    ProcessingResult(
-                        image=path,
-                        prediction="",
-                        status="error",
-                        error=f"Image load error: {e}",
-                    )
-                )
+                logger.error(f"Ошибка загрузки изображения {path}: {e}")
 
         if not images:
             return results
@@ -122,7 +174,7 @@ class ModelInference:
                         "role": "user",
                         "content": [
                             {"type": "image", "image": img},
-                            {"type": "text", "text": "Create a descriptive detailed caption for this image."},
+                            {"type": "text", "text": prompt_text},
                         ],
                     }
                 ]
@@ -143,160 +195,203 @@ class ModelInference:
                 padding=True,
             ).to(self.model.device)
 
+            start_time = time.time()
+
             with torch.no_grad():
                 generated_ids = self.model.generate(
                     **inputs,
-                    max_new_tokens=self.max_new_tokens,
-                    do_sample=not self.greedy,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    top_k=self.top_k,
-                    repetition_penalty=self.repetition_penalty,
+                    max_new_tokens=self.config.max_new_tokens,
+                    do_sample=self.config.do_sample,
+                    temperature=self.config.temperature,
+                    top_p=self.config.top_p,
+                    top_k=self.config.top_k,
+                    repetition_penalty=self.config.repetition_penalty,
                 )
 
-            trimmed = [
+            end_time = time.time()
+            duration_sec = end_time - start_time
+
+            trimmed_ids = [
                 out_ids[len(in_ids):]
                 for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
             ]
+
             raw_texts = self.processor.batch_decode(
-                trimmed,
+                trimmed_ids,
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False,
             )
 
-            for path, raw in zip(valid_paths, raw_texts):
+            for i, (path, raw) in enumerate(zip(valid_paths, raw_texts)):
                 cleaned = cleaner.clean(raw)
-                results.append(ProcessingResult(image=path, prediction=cleaned))
+                num_tokens = len(trimmed_ids[i])
+                tps = num_tokens / duration_sec if duration_sec > 0 else 0.0
+
+                results.append(ProcessingResult(
+                    image=path,
+                    prediction=cleaned,
+                    analysis_time_sec=round(duration_sec, 4),
+                    tokens_per_sec=round(tps, 2)
+                ))
 
         except Exception as e:
-            logger.error(f"Inference error: {e}")
-            for path in valid_paths:
-                results.append(
-                    ProcessingResult(
-                        image=path,
-                        prediction="",
-                        status="error",
-                        error=f"Inference error: {e}",
-                    )
-                )
-        finally:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            logger.error(f"Ошибка инференса батча: {e}")
 
         return results
 
 
-# ─── Main (синхронный конвейер) ───
+# ─── Main ───
 def main():
     parser = argparse.ArgumentParser(description="Batch image captioning with Qwen3-VL")
+
+    # Основные аргументы
+    parser.add_argument("directory", type=str, help="Папка с изображениями")
+    parser.add_argument("--output", type=str, default=None, help="Путь к файлу results.json")
     parser.add_argument(
-        "directory",
-        type=str,
-        help="Folder with images (use '.' for current directory)",
+        "--prompt",
+        default="Create a descriptive detailed caption for this image.",
+        help="Текст промпта для генерации"
     )
-    parser.add_argument("--model", default="Qwen/Qwen3-VL-2B-Thinking")
-    parser.add_argument("--batch-size", type=int, default=1, help="Inference batch size")
-    parser.add_argument("--max-tokens", type=int, default=4096)
-    parser.add_argument("--output", type=str, default=None, help="Path to results.json")
+    parser.add_argument(
+        "--extensions", default=".jpg,.jpeg,.png,.bmp,.gif,.webp,.tiff,.tif"
+    )
+    parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--lowercase", action="store_true")
-    parser.add_argument("--greedy", action="store_true")
+
+    # Аргументы конфигурации модели
+    parser.add_argument("--model", dest="model_name", default="Qwen/Qwen3-VL-2B-Thinking")
+    parser.add_argument("--device-map", default="auto", choices=["auto", "cuda", "cpu"])
+    parser.add_argument("--torch-dtype", default="auto", choices=["auto", "float16", "bfloat16", "float32"])
+
+    # Аргументы генерации
+    parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument("--greedy", action="store_true", help="Использовать жадное декодирование")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=20)
-    parser.add_argument(
-        "--extensions",
-        default=".jpg,.jpeg,.png,.bmp,.gif,.webp,.tiff,.tif",
-    )
+
     args = parser.parse_args()
 
-    # ─── Определение путей ───
+    # ─── Инициализация конфигурации ───
+    config = ModelConfig(
+        model_name=args.model_name,
+        device_map=args.device_map,
+        torch_dtype=args.torch_dtype,
+        max_new_tokens=args.max_tokens,
+        do_sample=not args.greedy,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k
+    )
+
+    # Пути
     target_dir = Path(args.directory).resolve()
     out_path = Path(args.output).resolve() if args.output else target_dir / "results.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Scanning directory: {target_dir}")
+    # Путь к текстовому файлу описаний
+    txt_log_path = out_path.parent / "prompt.txt"
 
-    # ─── Graceful shutdown ───
+    logger.info(f"Сканирование директории: {target_dir}")
+
+    # Graceful shutdown
     interrupted = False
 
     def _handler(signum, frame):
         nonlocal interrupted
         interrupted = True
-        logger.warning("Interrupted! Saving progress...")
+        logger.warning("Прерывание... Сохранение прогресса...")
 
     signal.signal(signal.SIGINT, _handler)
     signal.signal(signal.SIGTERM, _handler)
 
-    # ─── Сканирование ───
     extensions = set(args.extensions.split(","))
     try:
-        image_paths = scan_images(target_dir, extensions)
+        all_image_paths = scan_images(target_dir, extensions)
     except FileNotFoundError as e:
         logger.error(e)
         sys.exit(1)
 
-    total = len(image_paths)
-    logger.info(f"Found {total} image(s) in {target_dir}")
+    total_found = len(all_image_paths)
+    logger.info(f"Найдено изображений: {total_found}")
 
-    if total == 0:
-        logger.warning("No images to process. Exiting.")
+    if total_found == 0:
+        logger.warning("Изображения не найдены.")
         sys.exit(0)
 
-    # ─── Инициализация ───
+    # Resume logic
+    processed_images_paths: Set[str] = set()
+    existing_results: List[Dict] = []
+
+    if out_path.exists():
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                existing_results = json.load(f)
+                if isinstance(existing_results, list):
+                    processed_images_paths = {item.get("image") for item in existing_results}
+                    logger.info(f"Пропуск уже обработанных: {len(processed_images_paths)}")
+        except Exception as e:
+            logger.error(f"Ошибка чтения файла результатов: {e}")
+
+    image_paths_to_process = [str(p) for p in all_image_paths if str(p) not in processed_images_paths]
+
+    if not image_paths_to_process:
+        logger.info("Все изображения обработаны.")
+        sys.exit(0)
+
     cleaner = TextCleaner(lowercase=args.lowercase)
-    model = ModelInference(
-        model_name=args.model,
-        max_new_tokens=args.max_tokens,
-    )
-    model.greedy = args.greedy
-    model.temperature = args.temperature
-    model.top_p = args.top_p
-    model.top_k = args.top_k
+    model = ModelInference(config=config)
 
-    results: List[dict] = []
+    results = existing_results
     batch_size = max(1, args.batch_size)
+    total_to_process = len(image_paths_to_process)
 
-    # ─── Синхронная обработка ───
-    for i in range(0, total, batch_size):
+    # Определяем режим открытия текстового файла
+    # Если начинаем с нуля (нет существующих результатов), перезаписываем файл ('w')
+    # Если продолжаем работу, дозаписываем в конец ('a')
+    txt_mode = 'a' if existing_results else 'w'
+
+    iterator = tqdm(range(0, total_to_process, batch_size), desc="Processing")
+
+    for i in iterator:
         if interrupted:
             break
 
-        batch = [str(p) for p in image_paths[i : i + batch_size]]
-        batch_results = model.predict(batch, cleaner)
+        batch = image_paths_to_process[i: i + batch_size]
+        batch_results = model.predict(batch, args.prompt, cleaner)
 
+        if not batch_results:
+            continue
+
+        # Сохранение результатов
         for r in batch_results:
-            data = asdict(r)
-            results.append(data)
-            idx = len(results)
-            status = data.get("status", "success")
-            logger.info(f"[{idx}/{total}] {data['image']} → status={status}")
+            results.append(asdict(r))
 
-        # Автосохранение каждые 10 изображений
-        if len(results) % 10 == 0 or i + batch_size >= total or interrupted:
-            try:
-                out_path.write_text(
-                    json.dumps(results, indent=4, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                logger.info(f"Checkpoint saved → {out_path}")
-            except Exception as e:
-                logger.error(f"Save failed: {e}")
+        # 1. Сохранение JSON
+        try:
+            out_path.write_text(
+                json.dumps(results, indent=4, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.error(f"Ошибка сохранения JSON: {e}")
 
-    # ─── Финальное сохранение ───
-    try:
-        out_path.write_text(
-            json.dumps(results, indent=4, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        processed = len(results)
-        successful = sum(1 for r in results if r.get("status") == "success")
-        logger.info(
-            f"Done. Processed {processed}/{total} images "
-            f"({successful} success, {processed - successful} errors). "
-            f"Results: {out_path}"
-        )
-    except Exception as e:
-        logger.error(f"Final save failed: {e}")
-        sys.exit(1)
+        # 2. Дублирование в текстовый файл
+        try:
+            # После первой итерации меняем режим на дозапись, чтобы не стереть предыдущие батчи текущего запуска
+            # (актуально, если скрипт запущен с нуля: 1-й батч 'w', последующие 'a')
+            current_txt_mode = txt_mode if i == 0 else 'a'
+
+            with open(txt_log_path, current_txt_mode, encoding="utf-8") as tf:
+                for r in batch_results:
+                    # Одна строка - одно описание
+                    tf.write(r.prediction + "\n")
+        except Exception as e:
+            logger.error(f"Ошибка записи в текстовый файл: {e}")
+
+    logger.info(f"Готово. Обработано {len(image_paths_to_process)} файлов.")
+    logger.info(f"Результаты JSON: {out_path}")
+    logger.info(f"Текстовый файл описаний: {txt_log_path}")
 
 
 if __name__ == "__main__":
