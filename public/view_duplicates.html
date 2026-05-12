@@ -4,264 +4,537 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Отчет о дубликатах</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-body: #f4f6f8;
-            --bg-card: #ffffff;
-            --border: #e2e8f0;
-            --text-main: #1e293b;
-            --text-secondary: #64748b;
+            --bg: #f8f9fa;
+            --surface: #ffffff;
+            --border: #e5e7eb;
+            --border-hover: #d1d5db;
+            --text: #111827;
+            --text-secondary: #6b7280;
+            --text-tertiary: #9ca3af;
             --accent: #3b82f6;
             --accent-bg: #eff6ff;
+            --accent-border: #bfdbfe;
             --danger: #ef4444;
             --danger-bg: #fef2f2;
-            --radius: 12px;
-            --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --danger-border: #fecaca;
+            --success: #22c55e;
+            --success-bg: #f0fdf4;
+            --radius: 10px;
+            --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -1px rgba(0,0,0,0.04);
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            background-color: var(--bg-body);
-            color: var(--text-main);
+            background: var(--bg);
+            color: var(--text);
             font-family: var(--font);
+            min-height: 100vh;
+        }
+
+        .app-container {
+            max-width: 1600px;
+            margin: 0 auto;
             padding: 2rem;
         }
 
-        .header-container { max-width: 1600px; margin: 0 auto 2rem; }
-        h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 10px; }
-        h1::before {
-            content: ''; display: block; width: 10px; height: 10px;
-            background: var(--accent); border-radius: 50%;
-            box-shadow: 0 0 10px var(--accent);
+        /* Header */
+        .header { margin-bottom: 1.5rem; }
+        .header h1 {
+            font-size: 1.5rem; font-weight: 600;
+            letter-spacing: -0.02em; margin-bottom: 1.5rem;
         }
 
+        /* Stats */
         .stats-grid {
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem; margin-bottom: 1.5rem;
         }
-        .stat-card { background: var(--bg-card); padding: 1.25rem; border-radius: var(--radius); box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid var(--border); }
-        .stat-label { font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem; font-weight: 500; }
-        .stat-value { font-size: 1.5rem; font-weight: 700; font-family: monospace; }
-        .stat-value.danger { color: var(--danger); }
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+            box-shadow: var(--shadow-sm);
+            transition: box-shadow 0.2s;
+        }
+        .stat-card:hover { box-shadow: var(--shadow-md); }
+        .stat-label {
+            font-size: 0.8rem; font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+        .stat-value {
+            font-size: 1.5rem; font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
         .stat-value.accent { color: var(--accent); }
+        .stat-value.danger { color: var(--danger); }
 
+        /* Controls */
         .controls-bar {
-            background: var(--bg-card); padding: 1rem; border-radius: var(--radius);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid var(--border);
-            display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-bottom: 2rem;
-            max-width: 1600px; margin-left: auto; margin-right: auto;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.75rem 1rem;
+            display: none; flex-wrap: wrap; gap: 0.75rem;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            box-shadow: var(--shadow-sm);
         }
-        .search-input { flex: 1; min-width: 250px; padding: 0.6rem 1rem; border: 1px solid var(--border); border-radius: 8px; font-family: monospace; font-size: 0.9rem; }
-        .search-input:focus { outline: none; border-color: var(--accent); }
+        .controls-bar.visible { display: flex; }
 
-        .btn { padding: 0.6rem 1.2rem; border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; border: 1px solid transparent; background: var(--bg-body); color: var(--text-main); transition: all 0.2s; }
-        .btn:hover { background: #e2e8f0; }
-        .btn-primary { background: var(--accent); color: white; }
-        .btn-primary:hover { background: #2563eb; }
-        .btn-danger { background: var(--danger-bg); color: var(--danger); border-color: #fecaca; }
-        .btn-danger:hover { background: var(--danger); color: white; }
-        .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+        .search-input {
+            flex: 1; min-width: 220px;
+            padding: 0.5rem 1rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: var(--font);
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .search-input::placeholder { color: var(--text-tertiary); }
+        .search-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+
+        .btn {
+            padding: 0.5rem 1rem; border-radius: 8px;
+            font-size: 0.85rem; font-weight: 500;
+            cursor: pointer; border: 1px solid var(--border);
+            background: var(--surface); color: var(--text);
+            transition: all 0.2s; font-family: var(--font);
+            white-space: nowrap;
+        }
+        .btn:hover { background: var(--bg); border-color: var(--border-hover); }
+        .btn-danger {
+            background: var(--danger-bg); color: var(--danger);
+            border-color: var(--danger-border);
+        }
+        .btn-danger:hover {
+            background: var(--danger); color: #fff;
+            border-color: var(--danger);
+        }
+        .btn-danger:disabled {
+            opacity: 0.4; cursor: not-allowed;
+            background: var(--danger-bg); color: var(--danger);
+            border-color: var(--danger-border);
+        }
         .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.8rem; }
 
+        /* Upload zone */
         .upload-zone {
-            max-width: 800px; margin: 4rem auto; text-align: center;
-            border: 2px dashed var(--border); border-radius: var(--radius);
-            padding: 3rem; background: var(--bg-card); color: var(--text-secondary);
+            max-width: 640px; margin: 6rem auto; text-align: center;
+            border: 2px dashed var(--border);
+            border-radius: 16px;
+            padding: 4rem 2rem;
+            background: var(--surface);
             cursor: pointer; transition: all 0.2s;
         }
-        .upload-zone:hover { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
+        .upload-zone:hover {
+            border-color: var(--accent);
+            background: var(--accent-bg);
+        }
+        .upload-zone.dragover {
+            border-color: var(--accent);
+            background: var(--accent-bg);
+        }
         .upload-zone.hidden { display: none; }
+        .upload-zone h2 { font-size: 1.25rem; font-weight: 500; margin-bottom: 0.5rem; }
+        .upload-zone p { color: var(--text-secondary); font-size: 0.9rem; }
+        .upload-zone .upload-icon {
+            width: 48px; height: 48px; margin: 0 auto 1.5rem;
+            border-radius: 12px; background: var(--accent-bg);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.5rem;
+        }
 
-        .groups-container { max-width: 1600px; margin: 0 auto; display: flex; flex-direction: column; gap: 2rem; }
-        .group-block { background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid var(--border); overflow: hidden; }
+        /* Drop overlay */
+        .drop-overlay {
+            position: fixed; inset: 0; z-index: 999;
+            background: rgba(255,255,255,0.9);
+            display: none; align-items: center; justify-content: center;
+            flex-direction: column; gap: 1rem;
+            border: 3px dashed var(--accent);
+            margin: 16px; border-radius: 16px;
+        }
+        .drop-overlay.active { display: flex; }
+        .drop-overlay .drop-icon {
+            width: 80px; height: 80px; border-radius: 16px;
+            background: var(--accent-bg);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 2rem;
+        }
+        .drop-overlay p { color: var(--text); font-size: 1.1rem; font-weight: 500; }
+        .drop-overlay .sub { color: var(--text-secondary); font-size: 0.85rem; font-weight: 400; }
+
+        /* Groups */
+        .groups-container { display: flex; flex-direction: column; gap: 1.5rem; }
+        .group-block {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
 
         .group-header {
-            padding: 1rem 1.5rem;
-            background: #f8fafc;
+            padding: 1rem 1.25rem;
+            background: var(--bg);
             border-bottom: 1px solid var(--border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-weight: 600;
-            color: var(--text-secondary);
-            flex-wrap: wrap;
-            gap: 1rem;
+            display: flex; justify-content: space-between;
+            align-items: center; flex-wrap: wrap; gap: 0.75rem;
         }
-
         .group-title {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: var(--text-main);
+            display: flex; align-items: center; gap: 10px;
+            font-weight: 600; font-size: 0.95rem;
+        }
+        .badge {
+            background: var(--accent-bg); color: var(--accent);
+            padding: 0.2rem 0.65rem; border-radius: 99px;
+            font-size: 0.75rem; font-weight: 500;
+            border: 1px solid var(--accent-border);
+        }
+        .group-actions { display: flex; align-items: center; gap: 8px; }
+
+        /* File cards */
+        .files-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1rem; padding: 1.25rem;
+        }
+        .file-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden; transition: all 0.2s;
+            position: relative; display: flex; flex-direction: column;
+        }
+        .file-card:hover {
+            border-color: var(--border-hover);
+            box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
+        }
+        .file-card.selected {
+            background: var(--accent-bg);
+            border-color: var(--accent-border);
         }
 
-        .badge { background: var(--bg-body); padding: 0.25rem 0.75rem; border-radius: 99px; font-size: 0.8rem; color: var(--text-main); border: 1px solid var(--border); }
-
-        .group-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
+        .card-image-wrapper {
+            width: 100%; aspect-ratio: 3/4;
+            background: var(--bg);
+            position: relative; overflow: hidden;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
         }
-
-        .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1.5rem; padding: 1.5rem; }
-        .file-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; transition: all 0.2s; position: relative; display: flex; flex-direction: column; }
-        .file-card:hover { box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); transform: translateY(-2px); border-color: var(--accent); }
-        .file-card.selected { background: var(--accent-bg); border-color: var(--accent); }
-
-        .card-image-wrapper { width: 100%; aspect-ratio: 3/4; background: #f1f5f9; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-        .card-image { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s; }
+        .card-image-wrapper .placeholder-icon {
+            color: var(--text-tertiary); font-size: 2rem;
+            position: absolute; transition: opacity 0.3s;
+        }
+        .card-image {
+            width: 100%; height: 100%; object-fit: cover;
+            position: relative; z-index: 2;
+        }
         .card-image.loaded { opacity: 1; }
-        .card-checkbox { position: absolute; top: 10px; left: 10px; width: 20px; height: 20px; z-index: 10; cursor: pointer; accent-color: var(--accent); }
 
-        .card-info { padding: 0.75rem; flex: 1; display: flex; flex-direction: column; gap: 4px; }
-        .card-size { font-size: 0.75rem; font-weight: 700; color: var(--accent); text-transform: uppercase; font-family: monospace; }
-        .card-name { font-size: 0.85rem; color: var(--text-main); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; font-family: monospace; }
-        .card-path { font-size: 0.7rem; color: var(--text-secondary); margin-top: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: monospace; }
+        .card-checkbox {
+            position: absolute; top: 8px; left: 8px;
+            width: 18px; height: 18px; z-index: 10;
+            cursor: pointer; accent-color: var(--accent);
+        }
 
-        .lightbox { position: fixed; inset: 0; background: rgba(255,255,255,0.95); z-index: 1000; display: none; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
+        .card-info {
+            padding: 0.75rem;
+            flex: 1; display: flex; flex-direction: column; gap: 4px;
+            border-top: 1px solid var(--border);
+        }
+        .card-size {
+            font-size: 0.7rem; font-weight: 600;
+            color: var(--accent); text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .card-name {
+            font-size: 0.8rem; color: var(--text);
+            line-height: 1.35;
+            display: -webkit-box; -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical; overflow: hidden;
+            word-break: break-word;
+        }
+
+        /* Lightbox */
+        .lightbox {
+            position: fixed; inset: 0; z-index: 1000;
+            background: rgba(255,255,255,0.95);
+            display: none; align-items: center; justify-content: center;
+        }
         .lightbox.active { display: flex; }
-        .lightbox img { max-height: 90vh; max-width: 90vw; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); border-radius: 4px; }
-        .lightbox-close { position: absolute; top: 20px; right: 20px; font-size: 2rem; cursor: pointer; color: var(--text-secondary); background: none; border: none; }
+        .lightbox img {
+            max-height: 88vh; max-width: 88vw;
+            border-radius: 8px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+        }
+        .lightbox-close {
+            position: absolute; top: 20px; right: 24px;
+            font-size: 1.25rem; cursor: pointer;
+            color: var(--text-secondary);
+            background: var(--surface); border: 1px solid var(--border);
+            width: 36px; height: 36px; border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+        }
+        .lightbox-close:hover { background: var(--bg); color: var(--text); }
+        .lightbox-info {
+            position: absolute; bottom: 24px; left: 50%;
+            transform: translateX(-50%);
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 0.5rem 1rem;
+            font-size: 0.8rem; color: var(--text-secondary);
+            max-width: 80vw;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+
+        /* Toast */
+        .toast-container {
+            position: fixed; bottom: 24px; right: 24px;
+            z-index: 2000; display: flex; flex-direction: column; gap: 8px;
+        }
+        .toast {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            font-size: 0.85rem; color: var(--text);
+            box-shadow: var(--shadow-md);
+            animation: toast-in 0.3s ease;
+            display: flex; align-items: center; gap: 8px;
+            max-width: 360px;
+        }
+        .toast.success { border-left: 3px solid var(--success); }
+        .toast.error { border-left: 3px solid var(--danger); }
+        .toast.info { border-left: 3px solid var(--accent); }
+        .toast.removing { animation: toast-out 0.25s ease forwards; }
+
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes toast-out {
+            to { opacity: 0; transform: translateY(12px); }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .app-container { padding: 1rem; }
+            .header h1 { font-size: 1.35rem; }
+            .files-grid {
+                grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+                gap: 0.75rem; padding: 0.75rem;
+            }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
     </style>
 </head>
 <body>
 
-    <div class="header-container">
-        <h1>Отчет о дубликатах</h1>
-        <div class="stats-grid" id="statsGrid" style="display:none;">
-            <div class="stat-card"><div class="stat-label">Групп</div><div class="stat-value accent" id="statGroups">0</div></div>
-            <div class="stat-card"><div class="stat-label">Файлов</div><div class="stat-value" id="statFiles">0</div></div>
-                    <button class="btn btn-danger" id="deleteBtn" disabled onclick="deleteSelected()">
-            Удалить выбранные (<span id="selectedCount">0</span>)
-        </button>
+    <div class="drop-overlay" id="dropOverlay">
+        <div class="drop-icon">🖼</div>
+        <p>Перетащите папку с изображениями</p>
+        <p class="sub">для загрузки миниатюр</p>
+    </div>
+
+    <div class="app-container">
+        <header class="header">
+            <h1>Отчет о дубликатах</h1>
+            <div class="stats-grid" id="statsGrid" style="display:none;">
+                <div class="stat-card">
+                    <div class="stat-label">Групп</div>
+                    <div class="stat-value accent" id="statGroups">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Файлов</div>
+                    <div class="stat-value" id="statFiles">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Общий размер</div>
+                    <div class="stat-value" id="statSize">0 B</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Можно освободить</div>
+                    <div class="stat-value danger" id="statSavings">0 B</div>
+                </div>
+            </div>
+        </header>
+
+        <div class="controls-bar" id="controlsBar">
+            <input type="text" class="search-input" id="searchInput" placeholder="Поиск по имени файла…">
+            <button class="btn btn-sm" onclick="selectAllDuplicates()">Выбрать все дубли</button>
+            <button class="btn btn-danger" id="deleteBtn" disabled onclick="deleteSelected()">
+                Удалить (<span id="selectedCount">0</span>)
+            </button>
         </div>
+
+        <div id="uploadZone" class="upload-zone">
+            <div class="upload-icon">📄</div>
+            <h2>Загрузите duplicates.json</h2>
+            <p>Перетащите файл сюда или нажмите для выбора</p>
+            <input type="file" id="jsonInput" accept=".json" style="display:none">
+        </div>
+
+        <div id="groupsContainer" class="groups-container"></div>
     </div>
 
-    <!-- Minimal JSON Upload -->
-    <div id="uploadZone" class="upload-zone">
-        <h2>Загрузите duplicates.json</h2>
-        <p>Перетащите файл сюда или нажмите для выбора</p>
-        <input type="file" id="jsonInput" accept=".json" style="display:none">
-    </div>
-
-    <div id="groupsContainer" class="groups-container"></div>
-
-    <div class="lightbox" id="lightbox" onclick="if(event.target===this) this.classList.remove('active')">
-        <button class="lightbox-close" onclick="this.parentElement.classList.remove('active')">&times;</button>
+    <div class="lightbox" id="lightbox" onclick="if(event.target===this) closeLightbox()">
+        <button class="lightbox-close" onclick="closeLightbox()">✕</button>
         <img id="lightboxImg" src="" alt="Preview">
+        <div class="lightbox-info" id="lightboxInfo"></div>
     </div>
+
+    <div class="toast-container" id="toastContainer"></div>
 
     <script>
         let rawData = null;
         let imageCache = new Map();
         let selectedFiles = new Set();
-        let flatFileList = [];
 
         const $ = id => document.getElementById(id);
+
+        // ── Toast ──
+        function showToast(message, type = 'info') {
+            const container = $('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.classList.add('removing');
+                setTimeout(() => toast.remove(), 250);
+            }, 3000);
+        }
+
+        // ── JSON Upload ──
         const uploadZone = $('uploadZone');
         const jsonInput = $('jsonInput');
-        const groupsContainer = $('groupsContainer');
-        const statsGrid = $('statsGrid');
-        const controlsBar = $('controlsBar');
 
-        // JSON Upload
         uploadZone.onclick = () => jsonInput.click();
-        uploadZone.ondragover = e => { e.preventDefault(); uploadZone.style.borderColor = 'var(--accent)'; };
-        uploadZone.ondragleave = () => uploadZone.style.borderColor = 'var(--border)';
+        uploadZone.ondragover = e => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        };
+        uploadZone.ondragleave = () => uploadZone.classList.remove('dragover');
         uploadZone.ondrop = e => {
             e.preventDefault();
-            uploadZone.style.borderColor = 'var(--border)';
-            if(e.dataTransfer.files.length) handleJSON(e.dataTransfer.files[0]);
-        };
-        jsonInput.onchange = e => { if(e.target.files.length) handleJSON(e.target.files[0]); };
-
-        // Drag & Drop images anywhere for thumbnails
-        document.body.ondragover = e => { if(e.target === document.body) e.preventDefault(); };
-        document.body.ondrop = e => {
-            if(e.target === document.body && e.dataTransfer.files.length) {
-                handleFolder(e.dataTransfer.files);
+            uploadZone.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.name.endsWith('.json')) {
+                handleJSON(file);
+            } else {
+                showToast('Нужен файл .json', 'error');
             }
         };
+        jsonInput.onchange = e => { if (e.target.files.length) handleJSON(e.target.files[0]); };
 
+        // ── Global image drag & drop ──
+        let dragCounter = 0;
+        const dropOverlay = $('dropOverlay');
+
+        document.body.addEventListener('dragenter', e => {
+            e.preventDefault();
+            dragCounter++;
+            if (dragCounter === 1 && rawData) dropOverlay.classList.add('active');
+        });
+        document.body.addEventListener('dragleave', e => {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter === 0) dropOverlay.classList.remove('active');
+        });
+        document.body.addEventListener('dragover', e => e.preventDefault());
+        document.body.addEventListener('drop', e => {
+            e.preventDefault();
+            dragCounter = 0;
+            dropOverlay.classList.remove('active');
+            if (e.dataTransfer.files.length && rawData) {
+                handleFolder(e.dataTransfer.files);
+            }
+        });
+
+        // ── Data Loading ──
         function handleJSON(file) {
             const reader = new FileReader();
             reader.onload = e => {
                 try {
                     rawData = JSON.parse(e.target.result);
-                    rawData = cleanData(rawData);
-
                     renderStats();
                     renderGroups();
-
                     uploadZone.classList.add('hidden');
-                    statsGrid.style.display = 'grid';
-                    controlsBar.style.display = 'flex';
-                } catch(err) {
-                    alert('Ошибка JSON: ' + err.message);
+                    $('statsGrid').style.display = 'grid';
+                    $('controlsBar').classList.add('visible');
+                    showToast('Данные загружены', 'success');
+                } catch (err) {
+                    showToast('Ошибка JSON: ' + err.message, 'error');
                 }
             };
             reader.readAsText(file);
         }
 
-        function cleanData(obj) {
-            if (Array.isArray(obj)) {
-                return obj.map(item => cleanData(item));
-            } else if (typeof obj === 'object' && obj !== null) {
-                const newObj = {};
-                for (const [key, value] of Object.entries(obj)) {
-                    const cleanKey = key.trim();
-                    newObj[cleanKey] = cleanData(value);
-                }
-                return newObj;
-            } else if (typeof obj === 'string') {
-                return obj.trim();
-            }
-            return obj;
-        }
-
         function handleFolder(files) {
             let count = 0;
             Array.from(files).forEach(file => {
-                if(file.type.startsWith('image/')) {
+                if (file.type.startsWith('image/')) {
                     const url = URL.createObjectURL(file);
-                    imageCache.set(file.name.toLowerCase(), url);
+                    // Cache by filename only
+                    imageCache.set(file.path.toLowerCase(), url);
                     count++;
                 }
             });
 
+
+
             document.querySelectorAll('.card-image').forEach(img => {
-                const fname = img.dataset.name.toLowerCase();
-                if(imageCache.has(fname)) {
+                // Match by short filename to find preview
+                const fname = img.dataset.filename.toLowerCase();
+                if (imageCache.has(fname)) {
                     img.src = imageCache.get(fname);
                     img.classList.add('loaded');
                 }
             });
-            if(count > 0) alert(`Загружено миниатюр: ${count}`);
+            if (count > 0) showToast(`Загружено миниатюр: ${count}`, 'success');
         }
 
+        // ── Stats ──
         function renderStats() {
-            if(!rawData) return;
-            $('statGroups').textContent = rawData.total_groups || rawData.groups.length;
-            $('statFiles').textContent = rawData.total_files || rawData.groups.reduce((acc, g) => acc + g.count, 0);
+            if (!rawData) return;
+            const groups = rawData.groups || [];
+            $('statGroups').textContent = rawData.total_groups || groups.length;
+            $('statFiles').textContent = rawData.total_files || groups.reduce((acc, g) => acc + g.count, 0);
 
-            let totalSize = 0;
-            let savings = 0;
-
-            rawData.groups.forEach(g => {
-                const sizes = g.files.map(f => f.size).sort((a,b) => b-a);
-                totalSize += sizes.reduce((a,b) => a+b, 0);
-                if(sizes.length > 1) savings += sizes.slice(1).reduce((a,b) => a+b, 0);
+            let totalSize = 0, savings = 0;
+            groups.forEach(g => {
+                const sizes = g.files.map(f => f.size).sort((a, b) => b - a);
+                totalSize += sizes.reduce((a, b) => a + b, 0);
+                if (sizes.length > 1) savings += sizes.slice(1).reduce((a, b) => a + b, 0);
             });
-
             $('statSize').textContent = formatBytes(totalSize);
             $('statSavings').textContent = formatBytes(savings);
         }
 
+        // ── Groups Rendering ──
         function renderGroups() {
-            groupsContainer.innerHTML = '';
-            flatFileList = [];
+            const container = $('groupsContainer');
+            container.innerHTML = '';
+            selectedFiles.clear();
+            updateDeleteBtn();
 
-            rawData.groups.forEach(group => {
+            (rawData.groups || []).forEach(group => {
                 const groupEl = document.createElement('div');
                 groupEl.className = 'group-block';
                 groupEl.dataset.groupId = group.group_id;
@@ -274,7 +547,7 @@
                         <span class="badge">${group.count} файлов</span>
                     </div>
                     <div class="group-actions">
-                        <button class="btn btn-sm" onclick="toggleGroupSelect(${group.group_id})">Выбрать все / Снять</button>
+                        <button class="btn btn-sm" onclick="toggleGroupSelect(${group.group_id})">Инвертировать выбор</button>
                     </div>
                 `;
 
@@ -282,24 +555,28 @@
                 grid.className = 'files-grid';
 
                 group.files.forEach(file => {
-                    const globalIndex = flatFileList.length;
-                    flatFileList.push(file);
-
                     const card = document.createElement('div');
                     card.className = 'file-card';
                     card.dataset.path = file.path;
                     card.dataset.group = group.group_id;
-                    if(selectedFiles.has(file.path)) card.classList.add('selected');
+
+                    const safePath = escapeHtml(file.path);
+                    const safeName = escapeHtml(file.name);
+
+                    // Для JS-строк экранируем одинарные кавычки и слеши
+                    const jsSafePath = safePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                    const jsSafeName = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
                     card.innerHTML = `
-                        <div class="card-image-wrapper" onclick="openLightbox(${globalIndex})">
-                            <input type="checkbox" class="card-checkbox" onclick="event.stopPropagation()" onchange="toggleSelect(this, '${escapeHtml(file.path)}')">
-                            <img class="card-image" data-name="${escapeHtml(file.name)}" alt="thumb">
+                        <div class="card-image-wrapper" onclick="openLightbox('${jsSafeName}')">
+                            <input type="checkbox" class="card-checkbox"
+                                   onclick="event.stopPropagation()"
+                                   onchange="toggleSelect(this, '${jsSafePath}')">
+                            <img class="card-image" src="${safePath}" data-filename="${safeName}" alt="">
                         </div>
                         <div class="card-info">
                             <div class="card-size">${formatBytes(file.size)}</div>
-                            <div class="card-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
-                            <div class="card-path" title="${escapeHtml(file.path)}">${escapeHtml(file.path)}</div>
+                            <div class="card-name" title="${safeName}">${safeName}</div>
                         </div>
                     `;
                     grid.appendChild(card);
@@ -307,13 +584,14 @@
 
                 groupEl.appendChild(header);
                 groupEl.appendChild(grid);
-                groupsContainer.appendChild(groupEl);
+                container.appendChild(groupEl);
             });
 
-            if(imageCache.size > 0) {
+            // Apply cached images
+            if (imageCache.size > 0) {
                 document.querySelectorAll('.card-image').forEach(img => {
-                    const fname = img.dataset.name.toLowerCase();
-                    if(imageCache.has(fname)) {
+                    const fname = img.dataset.filename.toLowerCase();
+                    if (imageCache.has(fname)) {
                         img.src = imageCache.get(fname);
                         img.classList.add('loaded');
                     }
@@ -321,9 +599,10 @@
             }
         }
 
+        // ── Selection ──
         function toggleSelect(checkbox, path) {
             const card = checkbox.closest('.file-card');
-            if(checkbox.checked) {
+            if (checkbox.checked) {
                 selectedFiles.add(path);
                 card.classList.add('selected');
             } else {
@@ -335,17 +614,15 @@
 
         function toggleGroupSelect(groupId) {
             const groupEl = document.querySelector(`.group-block[data-group-id="${groupId}"]`);
+            if (!groupEl) return;
             const cards = groupEl.querySelectorAll('.file-card');
-            const checkboxes = groupEl.querySelectorAll('.card-checkbox');
-
-            // Check if all are selected
             const allSelected = Array.from(cards).every(c => c.classList.contains('selected'));
 
-            checkboxes.forEach((cb, idx) => {
-                cb.checked = !allSelected;
-                const card = cards[idx];
+            cards.forEach(card => {
+                const checkbox = card.querySelector('.card-checkbox');
                 const path = card.dataset.path;
-                if(!allSelected) {
+                checkbox.checked = !allSelected;
+                if (!allSelected) {
                     selectedFiles.add(path);
                     card.classList.add('selected');
                 } else {
@@ -356,15 +633,29 @@
             updateDeleteBtn();
         }
 
-        function toggleSelectAll() {
-            const allCards = document.querySelectorAll('.file-card');
-            const allChecked = Array.from(allCards).every(c => c.classList.contains('selected'));
-            allCards.forEach(card => {
-                const path = card.dataset.path;
-                const checkbox = card.querySelector('.card-checkbox');
-                checkbox.checked = !allChecked;
-                toggleSelect(checkbox, path);
+        function selectAllDuplicates() {
+            if (!rawData) return;
+            selectedFiles.clear();
+            document.querySelectorAll('.file-card').forEach(card => {
+                card.classList.remove('selected');
+                card.querySelector('.card-checkbox').checked = false;
             });
+
+            rawData.groups.forEach(group => {
+                const files = group.files.slice().sort((a, b) => b.size - a.size);
+                // Select all except the largest (keep the best)
+                files.slice(1).forEach(f => {
+                    const safePath = f.path;
+                    selectedFiles.add(safePath);
+                    const card = document.querySelector(`.file-card[data-path="${CSS.escape(safePath)}"]`);
+                    if (card) {
+                        card.classList.add('selected');
+                        card.querySelector('.card-checkbox').checked = true;
+                    }
+                });
+            });
+            updateDeleteBtn();
+            showToast(`Выбрано дубликатов: ${selectedFiles.size}`, 'info');
         }
 
         function updateDeleteBtn() {
@@ -373,42 +664,67 @@
         }
 
         function deleteSelected() {
-            if(!confirm(`Удалить ${selectedFiles.size} файлов?`)) return;
+            if (!confirm(`Удалить ${selectedFiles.size} файлов?`)) return;
             selectedFiles.forEach(path => {
                 const card = document.querySelector(`.file-card[data-path="${CSS.escape(path)}"]`);
-                if(card) card.remove();
+                if (card) {
+                    card.style.transition = 'all 0.3s ease';
+                    card.style.opacity = '0';
+                    card.style.transform = 'scale(0.9)';
+                    setTimeout(() => card.remove(), 300);
+                }
             });
+
+            setTimeout(() => {
+                document.querySelectorAll('.group-block').forEach(block => {
+                    if (!block.querySelector('.file-card')) block.remove();
+                });
+            }, 350);
+
             selectedFiles.clear();
             updateDeleteBtn();
-            alert('Файлы помечены на удаление (Демо режим)');
+            showToast('Файлы помечены на удаление (демо)', 'success');
         }
 
-        $('searchInput').addEventListener('input', (e) => {
+        // ── Search ──
+        $('searchInput').addEventListener('input', e => {
             const term = e.target.value.toLowerCase();
-            document.querySelectorAll('.file-card').forEach(card => {
-                card.style.display = card.innerText.toLowerCase().includes(term) ? 'flex' : 'none';
+            document.querySelectorAll('.group-block').forEach(block => {
+                let hasVisible = false;
+                block.querySelectorAll('.file-card').forEach(card => {
+                    const match = card.innerText.toLowerCase().includes(term);
+                    card.style.display = match ? 'flex' : 'none';
+                    if (match) hasVisible = true;
+                });
+                block.style.display = hasVisible ? '' : 'none';
             });
         });
 
-        function openLightbox(index) {
-            const file = flatFileList[index];
-            const img = $('lightboxImg');
-            const fname = file.name.toLowerCase();
-
-            if(imageCache.has(fname)) {
-                img.src = imageCache.get(fname);
+        // ── Lightbox ──
+        function openLightbox(name) {
+            const fname = name.toLowerCase();
+            if (imageCache.has(fname)) {
+                $('lightboxImg').src = imageCache.get(fname);
+                $('lightboxInfo').textContent = name;
                 $('lightbox').classList.add('active');
+            } else if (imageCache.size === 0) {
+                showToast('Перетащите папку с изображениями для просмотра', 'info');
             } else {
-                if(imageCache.size === 0) {
-                    alert('Перетащите папку с изображениями на страницу для просмотра миниатюр');
-                } else {
-                    alert('Файл не найден в загруженной папке');
-                }
+                showToast('Файл не найден в загруженной папке', 'error');
             }
         }
 
+        function closeLightbox() {
+            $('lightbox').classList.remove('active');
+        }
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeLightbox();
+        });
+
+        // ── Helpers ──
         function formatBytes(bytes) {
-            if(!bytes) return '0 B';
+            if (!bytes) return '0 B';
             const k = 1024;
             const sizes = ['B', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -416,8 +732,13 @@
         }
 
         function escapeHtml(text) {
-            if(!text) return '';
-            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+            if (!text) return '';
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
         }
     </script>
 </body>
