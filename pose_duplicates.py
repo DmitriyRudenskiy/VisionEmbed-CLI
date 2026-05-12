@@ -1,73 +1,71 @@
 #!/usr/bin/env python3
 """
-Поиск дубликатов изображений по позе человека с помощью DWPose (ООП-версия).
+Поиск дубликатов изображений по позе человека с помощью DWPose (ООП-версия v3).
+
 Нормализация по длине торса, взвешенный RMSE, ограничение на отклонение сустава.
 Результат сохраняется в JSON файл.
 
-Улучшения v2:
-- Валидация входных параметров и структуры кеша
-- torch.inference_mode() для ускорения и безопасности инференса
-- Оптимизация векторных операций и маскирования
-- Адаптивный прогресс-лог без спама
-- Метаданные в JSON-отчёте (пороги, версия, дата)
-- Graceful shutdown на всех этапах
-- Строгая типизация и lazy-логирование
+Ключевые улучшения v3:
+- Чистый API кеша: update()/prune()/save() вместо save_if_dirty()
+- DuplicateMatch + FindResult для типобезопасного хранения результатов
+- Оценки сходства (RMSE, max_joint_dist) в JSON-отчёте
+- Обработка CUDA OOM с автоматическим повтором на половинном разрешении
+- Ранняя фильтрация кандидатов до дорогих вычислений в попарном сравнении
+- ProgressTracker с ETA для адаптивного прогресс-лога
+- Ленивая инициализация PyTorch — нет побочных эффектов на уровне модуля
+- Константы NUM_KEYPOINTS / FLAT_KEYPOINTS вместо магических чисел
+- CLI-опции --min-group-size, --cache-file
 """
 from __future__ import annotations
 
-import os
-import sys
 import json
 import logging
+import os
+import sys
 import argparse
 import tempfile
 import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, UnidentifiedImageError, ImageOps
 
+__all__ = ["App", "DuplicateFinder", "PoseExtractor", "PoseCache", "ImageCollector"]
+
 log = logging.getLogger(__name__)
 
-# ------------------- Импорт зависимостей -------------------
+# ─── Зависимости ────────────────────────────────────────────────────────────
 try:
     from dwpose import DwposeDetector
 except ImportError:
     print(
-        "❌ Ошибка: модуль 'dwpose' не найден. "
-        "Установите его или активируйте правильное окружение.",
+        "❌ Модуль 'dwpose' не найден. Установите или активируйте окружение.",
         file=sys.stderr,
     )
     sys.exit(1)
 
-try:
-    import torch
+# ─── Константы ──────────────────────────────────────────────────────────────
+NUM_KEYPOINTS = 18
+FLAT_KEYPOINTS = NUM_KEYPOINTS * 3  # 54
 
-    torch.set_grad_enabled(False)
-    torch.set_num_threads(1)
-    if hasattr(torch._C, "_set_print_stack_traces_on_fatal_signal"):
-        torch._C._set_print_stack_traces_on_fatal_signal(False)
-    _TORCH_AVAILABLE = True
-except ImportError:
-    _TORCH_AVAILABLE = False
-
-# ------------------- Константы -------------------
 DEFAULT_POSE_THRESHOLD = 0.07
 DEFAULT_MAX_JOINT_DIST = 0.12
 DEFAULT_MIN_COMMON_JOINTS = 10
+DEFAULT_MIN_GROUP_SIZE = 2
 DWPOSE_RES = 1024
 SUPPORTED_EXTENSIONS = frozenset(
     {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".webp"}
 )
 DEFAULT_JSON_REPORT = "duplicates.json"
 POSE_CACHE_FILE = "pose_cache.json"
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 MIN_CONFIDENCE = 0.3
 MIN_TORSO_CONFIDENCE = 0.3
 
@@ -85,9 +83,45 @@ JOINT_WEIGHTS: NDArray[np.float32] = np.array(
 )
 
 
-# ------------------- Структуры данных -------------------
+# ─── Ленивая инициализация PyTorch ──────────────────────────────────────────
+_torch_initialized = False
+
+
+def _init_torch() -> None:
+    """Настройка PyTorch при первом использовании (без побочных эффектов на import)."""
+    global _torch_initialized
+    if _torch_initialized:
+        return
+    _torch_initialized = True
+    try:
+        import torch
+
+        torch.set_grad_enabled(False)
+        # Один поток CPU — избегаем конкуренции с ThreadPoolExecutor
+        torch.set_num_threads(1)
+        if hasattr(torch._C, "_set_print_stack_traces_on_fatal_signal"):
+            torch._C._set_print_stack_traces_on_fatal_signal(False)
+    except ImportError:
+        pass
+
+
+def _torch_inference_context():
+    """Контекстный менеджер для инференса: inference_mode > no_grad > passthrough."""
+    try:
+        import torch
+
+        if hasattr(torch, "inference_mode"):
+            return torch.inference_mode()
+        return torch.no_grad()
+    except ImportError:
+        return nullcontext()
+
+
+# ─── Структуры данных ───────────────────────────────────────────────────────
 @dataclass(slots=True)
 class ImageMeta:
+    """Метаданные изображения с опциональной нормализованной позой."""
+
     path: Path
     name: str
     size: int
@@ -95,7 +129,25 @@ class ImageMeta:
     pose: NDArray[np.float32] | None = field(default=None, repr=False)
 
 
-# ------------------- Логирование -------------------
+class DuplicateMatch(NamedTuple):
+    """Связь-дубликат с оценками сходства."""
+
+    idx_a: int
+    idx_b: int
+    rmse: float
+    max_joint_dist: float
+
+
+@dataclass
+class FindResult:
+    """Полный результат поиска дубликатов."""
+
+    groups: list[list[ImageMeta]]
+    matches: list[DuplicateMatch]
+    valid_items: list[ImageMeta]
+
+
+# ─── Логирование ────────────────────────────────────────────────────────────
 def setup_logging(debug: bool, quiet: bool = False) -> None:
     level = logging.DEBUG if debug else (logging.WARNING if quiet else logging.INFO)
     logging.basicConfig(
@@ -107,29 +159,65 @@ def setup_logging(debug: bool, quiet: bool = False) -> None:
     log.setLevel(level)
 
 
-# ------------------- Утилита: атомарная запись JSON -------------------
+class ProgressTracker:
+    """Адаптивный прогресс-лог с ETA."""
+
+    def __init__(
+        self, total: int, label: str = "Обработка", interval_pct: float = 5.0
+    ):
+        self.total = total
+        self.label = label
+        self._interval = interval_pct
+        self._done = 0
+        self._last_pct = -1.0
+        self._start = time.monotonic()
+
+    def advance(self, n: int = 1) -> None:
+        self._done += n
+        pct = (self._done / self.total * 100) if self.total else 100.0
+        if (pct - self._last_pct >= self._interval) or self._done == self.total:
+            self._last_pct = pct
+            elapsed = time.monotonic() - self._start
+            if 0 < self._done < self.total:
+                eta = elapsed / self._done * (self.total - self._done)
+                eta_str = f", ETA {eta:.0f}s" if eta >= 1 else ""
+            else:
+                eta_str = ""
+            log.info(
+                "%s: %d/%d (%.1f%%%s)", self.label, self._done, self.total, pct, eta_str
+            )
+
+
+# ─── Атомарная запись JSON ──────────────────────────────────────────────────
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
-    dir_name = path.parent
-    tmp_path = None
+    """Атомарная запись JSON через временный файл + os.replace."""
+    tmp_path: str | None = None
     try:
-        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp.json", text=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=path.parent, suffix=".tmp.json", text=True
+        )
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, path)
     except Exception as e:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-        log.error("Атомарная запись не удалась: %s. Прямая запись...", e)
+        log.error("Атомарная запись не удалась: %s — прямая запись", e)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-# ------------------- Работа с кешем поз -------------------
+# ─── Кеш поз ────────────────────────────────────────────────────────────────
 class PoseCache:
+    """Кеш извлечённых поз с автоочисткой устаревших записей.
+
+    API: load() → get_valid_pose() × N → update() × K → prune() → save().
+    """
+
     def __init__(self, cache_path: Path | None, base_dir: Path):
         self.cache_path = cache_path
         self.base_dir = base_dir
-        self._cache: dict[str, dict[str, Any]] = {}
+        self._entries: dict[str, dict[str, Any]] = {}
         self._dirty = False
 
     def _to_relative(self, path: Path) -> str:
@@ -138,71 +226,90 @@ class PoseCache:
         except ValueError:
             return str(path)
 
+    # ── Чтение ──
+
     def load(self) -> None:
+        """Загрузить кеш. Несовместимая версия → пересоздание."""
         if not self.cache_path or not self.cache_path.exists():
             return
         try:
             with open(self.cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict) or data.get("version") != CACHE_VERSION:
-                log.warning("Версия кеша устарела или структура повреждена. Кеш будет пересоздан.")
+                log.warning("Версия кеша устарела — пересоздание.")
                 return
-            entries = data.get("entries", {})
+            entries = data.get("entries")
             if not isinstance(entries, dict):
-                log.warning("Невалидная структура кеша. Пересоздание.")
+                log.warning("Невалидная структура кеша — пересоздание.")
                 return
-            self._cache = entries
-            log.info("📦 Кеш загружен: %d записей.", len(self._cache))
+            self._entries = entries
+            log.info("📦 Кеш загружен: %d записей.", len(self._entries))
         except Exception as e:
             log.warning("Не удалось прочитать кеш: %s", e)
 
-    def save_if_dirty(self, processed_items: list[ImageMeta], all_files: list[ImageMeta]) -> None:
-        if not self.cache_path or not self._dirty:
-            return
-
-        for it in processed_items:
-            if it.pose is not None:
-                rel = self._to_relative(it.path)
-                self._cache[rel] = {
-                    "pose": it.pose.tolist(),
-                    "mtime": it.mtime,
-                    "size": it.size,
-                }
-
-        all_paths = {self._to_relative(it.path) for it in all_files}
-        stale = [k for k in self._cache if k not in all_paths]
-        for k in stale:
-            del self._cache[k]
-
-        payload = {"version": CACHE_VERSION, "entries": self._cache}
-        _atomic_write_json(self.cache_path, payload)
-        self._dirty = False
-        log.info("💾 Кеш поз обновлён: %s", self.cache_path)
-
     def get_valid_pose(self, item: ImageMeta) -> NDArray[np.float32] | None:
-        entry = self._cache.get(self._to_relative(item.path))
+        """Вернуть позу из кеша, если файл не изменился."""
+        entry = self._entries.get(self._to_relative(item.path))
         if not entry:
             return None
         if entry.get("mtime") != item.mtime or entry.get("size") != item.size:
             return None
         pose_list = entry.get("pose")
-        if not isinstance(pose_list, list) or len(pose_list) != 54:
+        if not isinstance(pose_list, list) or len(pose_list) != FLAT_KEYPOINTS:
             return None
         return np.array(pose_list, dtype=np.float32).reshape(-1, 3)
 
-    def mark_dirty(self) -> None:
+    # ── Запись ──
+
+    def update(self, item: ImageMeta) -> None:
+        """Сохранить извлечённую позу в кеш (отмечает кеш как грязный)."""
+        if item.pose is None:
+            return
+        rel = self._to_relative(item.path)
+        self._entries[rel] = {
+            "pose": item.pose.tolist(),
+            "mtime": item.mtime,
+            "size": item.size,
+        }
         self._dirty = True
 
+    def prune(self, existing_paths: set[str]) -> int:
+        """Удалить записи для файлов, которых больше нет. Вернуть кол-во удалённых."""
+        stale = [k for k in self._entries if k not in existing_paths]
+        for k in stale:
+            del self._entries[k]
+        if stale:
+            self._dirty = True
+            log.debug("Удалено %d устаревших записей кеша.", len(stale))
+        return len(stale)
 
-# ------------------- Экстрактор поз -------------------
+    def save(self) -> None:
+        """Записать кеш на диск, если были изменения."""
+        if not self.cache_path or not self._dirty:
+            return
+        _atomic_write_json(
+            self.cache_path, {"version": CACHE_VERSION, "entries": self._entries}
+        )
+        self._dirty = False
+        log.info("💾 Кеш обновлён: %s (%d записей)", self.cache_path, len(self._entries))
+
+
+# ─── Экстрактор поз ────────────────────────────────────────────────────────
 class PoseExtractor:
+    """Извлечение и нормализация поз с помощью DWPose.
+
+    GPU-инференс сериализован через _inference_lock.
+    При CUDA OOM — автоматический повтор на половинном разрешении.
+    """
+
     def __init__(self, model: DwposeDetector, device: str = "auto"):
         self.model = model
         self.device = device
-        self._lock = threading.Lock()
+        self._inference_lock = threading.Lock()
 
     @staticmethod
     def prepare_image(img: Image.Image, max_size: int = DWPOSE_RES) -> Image.Image:
+        """EXIF-трансформация, конвертация в RGB, ресайз."""
         img = ImageOps.exif_transpose(img) or img
         img = img.convert("RGB")
         w, h = img.size
@@ -211,36 +318,51 @@ class PoseExtractor:
             img = img.resize((int(w * ratio), int(h * ratio)), _LANCZOS)
         return img
 
+    def _run_inference(self, img: Image.Image) -> Any:
+        """Потокобезопасный инференс с torch.inference_mode()."""
+        with self._inference_lock:
+            with _torch_inference_context():
+                return self.model(
+                    img,
+                    include_hand=False,
+                    include_face=False,
+                    include_body=True,
+                    image_and_json=True,
+                    detect_resolution=DWPOSE_RES,
+                )
+
     def extract(self, image_path: Path) -> NDArray[np.float32] | None:
+        """Извлечь нормализованную позу из изображения."""
         try:
             with Image.open(image_path) as img:
                 img_prep = self.prepare_image(img)
-
-            with self._lock:
-                if _TORCH_AVAILABLE and hasattr(torch, "inference_mode"):
-                    with torch.inference_mode():
-                        result = self.model(
-                            img_prep, include_hand=False, include_face=False,
-                            include_body=True, image_and_json=True,
-                            detect_resolution=DWPOSE_RES,
-                        )
-                else:
-                    result = self.model(
-                        img_prep, include_hand=False, include_face=False,
-                        include_body=True, image_and_json=True,
-                        detect_resolution=DWPOSE_RES,
-                    )
+            result = self._run_inference(img_prep)
             return self._parse_result(result, image_path.name)
-
         except UnidentifiedImageError:
-            log.warning("⚠️ Файл не является изображением или повреждён: %s", image_path.name)
+            log.warning("⚠️ Файл не распознан как изображение: %s", image_path.name)
             return None
         except Exception as e:
+            if _is_oom_error(e):
+                return self._retry_half_res(image_path)
             log.error("Ошибка обработки %s: %s", image_path.name, e)
             return None
 
+    def _retry_half_res(self, image_path: Path) -> NDArray[np.float32] | None:
+        """Повторная попытка с DWPOSE_RES/2 при CUDA OOM."""
+        log.warning("⚠️ CUDA OOM: %s — повтор на %dpx", image_path.name, DWPOSE_RES // 2)
+        _torch_clear_cache()
+        try:
+            with Image.open(image_path) as img:
+                img_prep = self.prepare_image(img, max_size=DWPOSE_RES // 2)
+            result = self._run_inference(img_prep)
+            return self._parse_result(result, image_path.name)
+        except Exception as e2:
+            log.error("Повторная ошибка для %s: %s", image_path.name, e2)
+            return None
+
     @staticmethod
-    def _parse_result(result: object, filename: str) -> NDArray[np.float32] | None:
+    def _parse_result(result: Any, filename: str) -> NDArray[np.float32] | None:
+        """Разбор ответа DWPose → массив (18, 3) или None."""
         j: dict[str, Any] | None = None
         if isinstance(result, tuple) and len(result) >= 2:
             j = result[1]
@@ -252,17 +374,22 @@ class PoseExtractor:
 
         people = j["people"]
         if len(people) > 1:
-            log.debug("На фото %s найдено %d людей. Используется поза первого.", filename, len(people))
+            log.debug(
+                "%s: %d людей — используется поза первого.", filename, len(people)
+            )
 
         kp = people[0].get("pose_keypoints_2d", [])
-        if not isinstance(kp, list) or len(kp) != 54:
+        if not isinstance(kp, list) or len(kp) != FLAT_KEYPOINTS:
             return None
 
         pose = np.array(kp, dtype=np.float32).reshape(-1, 3)
         return PoseExtractor._normalize_pose(pose, filename)
 
     @staticmethod
-    def _normalize_pose(pose: NDArray[np.float32], filename: str) -> NDArray[np.float32] | None:
+    def _normalize_pose(
+        pose: NDArray[np.float32], filename: str
+    ) -> NDArray[np.float32] | None:
+        """Нормализация: центр = середина торса, масштаб = длина торса."""
         neck = pose[1]
         rhip, lhip = pose[8], pose[11]
 
@@ -280,7 +407,7 @@ class PoseExtractor:
         torso_len = np.linalg.norm(neck[:2] - mid_hip)
 
         if torso_len < 1e-4:
-            log.debug("Длина торса слишком мала в %s", filename)
+            log.debug("Длина торса ≈ 0 в %s", filename)
             return None
 
         norm_pose = pose.copy()
@@ -288,8 +415,26 @@ class PoseExtractor:
         return norm_pose
 
 
-# ------------------- Сбор файлов изображений -------------------
+def _is_oom_error(error: Exception) -> bool:
+    """Проверить, является ли ошибка нехваткой GPU-памяти."""
+    msg = str(error).lower()
+    return "out of memory" in msg or "cuda" in msg and "memory" in msg
+
+
+def _torch_clear_cache() -> None:
+    """Очистить CUDA-кеш при OOM."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+# ─── Сбор файлов ────────────────────────────────────────────────────────────
 class ImageCollector:
+    """Рекурсивный сбор поддерживаемых изображений из директории."""
+
     @staticmethod
     def collect(directory: Path, recursive: bool = False) -> list[ImageMeta]:
         files: list[ImageMeta] = []
@@ -303,39 +448,51 @@ class ImageCollector:
                             if p.suffix.lower() in SUPPORTED_EXTENSIONS:
                                 try:
                                     stat = entry.stat()
-                                    files.append(ImageMeta(
-                                        path=p, name=p.name, size=stat.st_size, mtime=stat.st_mtime
-                                    ))
+                                    files.append(
+                                        ImageMeta(
+                                            path=p,
+                                            name=p.name,
+                                            size=stat.st_size,
+                                            mtime=stat.st_mtime,
+                                        )
+                                    )
                                 except OSError as e:
-                                    log.debug("Не удалось получить метаданные %s: %s", p.name, e)
+                                    log.debug(
+                                        "Метаданные недоступны %s: %s", p.name, e
+                                    )
                         elif recursive and entry.is_dir(follow_symlinks=False):
                             _scan(Path(entry.path))
             except PermissionError:
-                log.warning("Нет прав доступа к директории: %s", d)
+                log.warning("Нет прав доступа: %s", d)
 
         _scan(directory.resolve())
         return files
 
 
-# ------------------- Поиск дубликатов -------------------
+# ─── Поиск дубликатов ───────────────────────────────────────────────────────
 class DuplicateFinder:
+    """Попарное векторизованное сравнение поз + группировка в связные компоненты."""
+
     def __init__(
-            self,
-            pose_extractor: PoseExtractor,
-            cache: PoseCache,
-            pose_threshold: float,
-            max_joint_dist: float,
-            min_common_joints: int,
-            num_workers: int = 1,
+        self,
+        pose_extractor: PoseExtractor,
+        cache: PoseCache,
+        pose_threshold: float,
+        max_joint_dist: float,
+        min_common_joints: int,
+        min_group_size: int = DEFAULT_MIN_GROUP_SIZE,
+        num_workers: int = 1,
     ):
         self.extractor = pose_extractor
         self.cache = cache
         self.pose_threshold = pose_threshold
         self.max_joint_dist = max_joint_dist
         self.min_common_joints = min_common_joints
+        self.min_group_size = min_group_size
         self.num_workers = num_workers
 
-    def find(self, files: list[ImageMeta]) -> list[list[ImageMeta]]:
+    def find(self, files: list[ImageMeta]) -> FindResult:
+        """Основной пайплайн: кеш → извлечение → сравнение → группировка."""
         self.cache.load()
         to_process: list[ImageMeta] = []
 
@@ -347,119 +504,160 @@ class DuplicateFinder:
         if to_process:
             try:
                 self._extract_poses(to_process)
-                self.cache.mark_dirty()
             finally:
-                self.cache.save_if_dirty(
-                    [it for it in to_process if it.pose is not None], files
-                )
+                # Гарантированное сохранение кеша даже при ошибке
+                for it in to_process:
+                    self.cache.update(it)
+                existing = {self.cache._to_relative(it.path) for it in files}
+                self.cache.prune(existing)
+                self.cache.save()
         else:
             log.info("✅ Все позы загружены из актуального кеша.")
 
         valid_items = [it for it in files if it.pose is not None]
         if len(valid_items) < 2:
             log.info("Недостаточно изображений с валидными позами для сравнения.")
-            return []
+            return FindResult(groups=[], matches=[], valid_items=valid_items)
 
         log.info(
-            "Попарное сравнение %d изображений (порог RMSE=%.3f)...",
-            len(valid_items), self.pose_threshold,
+            "Попарное сравнение %d изображений (RMSE≤%.3f, max_joint≤%.3f)...",
+            len(valid_items),
+            self.pose_threshold,
+            self.max_joint_dist,
         )
-        groups = self._compare_and_group(valid_items)
+
+        matches = self._find_matches(valid_items)
+        groups = self._build_groups(valid_items, matches)
+
         log.info("🎯 Найдено %d групп дубликатов.", len(groups))
-        return groups
+        return FindResult(groups=groups, matches=matches, valid_items=valid_items)
+
+    # ── Извлечение ──
 
     def _extract_poses(self, items: list[ImageMeta]) -> None:
-        log.info("Извлечение поз для %d изображений (потоков: %d)...", len(items), self.num_workers)
-        if self.num_workers > 1:
-            log.warning(
-                "⚠️ Многопоточность с GPU-моделями может вызывать ошибки CUDA. При сбоях используйте --workers 1")
-
-        processed = 0
-        total = len(items)
-        log_interval = max(1, total // 20)
+        """I/O параллельно (ThreadPool), инференс сериализован (_inference_lock)."""
+        log.info(
+            "Извлечение поз: %d изображений (I/O-потоков: %d)...",
+            len(items),
+            self.num_workers,
+        )
+        progress = ProgressTracker(len(items), "Извлечение поз")
 
         try:
             with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-                future_to_item = {executor.submit(self.extractor.extract, item.path): item for item in items}
+                future_to_item = {
+                    executor.submit(self.extractor.extract, item.path): item
+                    for item in items
+                }
                 for future in as_completed(future_to_item):
                     item = future_to_item[future]
                     try:
                         item.pose = future.result()
                     except Exception as e:
-                        log.error("Поток завершился с ошибкой для %s: %s", item.path.name, e)
+                        log.error("Ошибка потока для %s: %s", item.path.name, e)
                         item.pose = None
-
-                    processed += 1
-                    if processed % log_interval == 0 or processed == total:
-                        log.info("Обработано: %d/%d (%.0f%%)", processed, total, processed / total * 100)
+                    progress.advance()
         except KeyboardInterrupt:
-            log.warning("⛔ Прервано пользователем во время извлечения поз.")
+            log.warning("⛔ Прервано при извлечении поз.")
             raise
 
-    def _compare_and_group(self, items: list[ImageMeta]) -> list[list[ImageMeta]]:
+    # ── Сравнение ──
+
+    def _find_matches(self, items: list[ImageMeta]) -> list[DuplicateMatch]:
+        """Векторизованное попарное сравнение с ранней фильтрацией кандидатов.
+
+        Оптимизация: для каждой строки i вычисляем dists_sq только для пар,
+        прошедших порог min_common_joints, а не для всех (n-i) последующих.
+        """
         n = len(items)
-        if n < 2:
-            return []
+        poses = np.array([it.pose for it in items], dtype=np.float32)  # (N, 18, 3)
+        poses_xy = poses[:, :, :2]  # (N, 18, 2)
+        conf_masks = poses[:, :, 2] > MIN_CONFIDENCE  # (N, 18)
 
-        poses = np.array([it.pose for it in items], dtype=np.float32)
-        poses_xy = poses[:, :, :2]
-        conf_masks = poses[:, :, 2] > MIN_CONFIDENCE
+        matches: list[DuplicateMatch] = []
+        max_dist_sq = np.float32(self.max_joint_dist ** 2)
+        weights = JOINT_WEIGHTS[np.newaxis, :]  # (1, 18)
 
-        edges: list[tuple[int, int]] = []
-        max_joint_dist_sq = self.max_joint_dist ** 2
-        weights = JOINT_WEIGHTS[np.newaxis, :]
-
-        log_interval = max(1, (n - 1) // 20)
+        progress = ProgressTracker(n - 1, "Сравнение")
 
         try:
             for i in range(n - 1):
-                if i % log_interval == 0:
-                    log.info("Сравнение: строка %d/%d (~%.0f%%)", i + 1, n - 1, (i / max(n - 1, 1)) * 100)
+                progress.advance()
 
-                m1 = conf_masks[i]
-                p1_xy = poses_xy[i]
-                m_rest = conf_masks[i + 1:]
-                p_rest_xy = poses_xy[i + 1:]
+                m1 = conf_masks[i]  # (18,)
+                p1_xy = poses_xy[i]  # (18, 2) <- ИСПРАВЛЕНО: добавлена пропущенная строка
 
-                common = m1[np.newaxis, :] & m_rest
-                valid_counts = common.sum(axis=1)
-                enough = valid_counts >= self.min_common_joints
-                if not np.any(enough):
+                # Общие уверенные суставы со всеми последующими строками
+                common = m1[np.newaxis, :] & conf_masks[i + 1 :]  # (M, 18)
+                valid_counts = common.sum(axis=1)  # (M,)
+
+                # ★ Ранняя фильтрация — работаем только с кандидатами
+                candidates = np.flatnonzero(valid_counts >= self.min_common_joints)
+                if candidates.size == 0:
                     continue
 
-                diffs = p1_xy[np.newaxis, :, :] - p_rest_xy
-                dists_sq = np.einsum('ijk,ijk->ij', diffs, diffs)
+                # Абсолютные индексы строк для fancy indexing (одна операция вместо среза)
+                row_idx = candidates + (i + 1)
+                p_cand = poses_xy[row_idx]  # (K, 18, 2)
+                m_cand = common[candidates]  # (K, 18)
 
-                # Безопасный максимум: -inf для несовпадающих суставов
-                max_dists = np.where(common, dists_sq, -np.inf).max(axis=1)
+                diffs = p1_xy[np.newaxis, :, :] - p_cand  # (K, 18, 2)
+                dists_sq = np.einsum("ijk,ijk->ij", diffs, diffs)  # (K, 18)
 
-                weighted_sum = (weights * dists_sq * common).sum(axis=1)
-                weight_total = (weights * common).sum(axis=1)
+                # Макс. расстояние среди общих суставов (−inf для необщих)
+                max_dists = np.where(m_cand, dists_sq, np.float32(-np.inf)).max(
+                    axis=1
+                )
+
+                # Взвешенный RMSE
+                weighted_sum = (weights * dists_sq * m_cand).sum(axis=1)
+                weight_total = (weights * m_cand).sum(axis=1)
                 rmse = np.sqrt(weighted_sum / np.maximum(weight_total, 1e-10))
 
-                is_dup = enough & (max_dists <= max_joint_dist_sq) & (rmse <= self.pose_threshold)
-                dup_indices = np.flatnonzero(is_dup) + i + 1
-                edges.extend((i, int(j)) for j in dup_indices)
+                # Итоговая фильтрация
+                is_dup = (max_dists <= max_dist_sq) & (rmse <= self.pose_threshold)
+                dup_k = np.flatnonzero(is_dup)
+
+                for k in dup_k:
+                    j = int(row_idx[k])
+                    matches.append(
+                        DuplicateMatch(
+                            idx_a=i,
+                            idx_b=j,
+                            rmse=float(rmse[k]),
+                            max_joint_dist=float(np.sqrt(max_dists[k])),
+                        )
+                    )
         except KeyboardInterrupt:
-            log.warning("⛔ Прервано пользователем во время сравнения.")
+            log.warning("⛔ Прервано при сравнении.")
             raise
 
-        if not edges:
+        return matches
+
+    # ── Группировка ──
+
+    @staticmethod
+    def _build_groups(
+        items: list[ImageMeta], matches: list[DuplicateMatch]
+    ) -> list[list[ImageMeta]]:
+        """Связные компоненты графа совпадений."""
+        if not matches:
             return []
 
         graph: defaultdict[int, set[int]] = defaultdict(set)
-        for u, v in edges:
-            graph[u].add(v)
-            graph[v].add(u)
+        for m in matches:
+            graph[m.idx_a].add(m.idx_b)
+            graph[m.idx_b].add(m.idx_a)
 
+        n = len(items)
         visited = [False] * n
         groups: list[list[ImageMeta]] = []
 
         for start in range(n):
             if visited[start] or start not in graph:
                 continue
-            stack = [start]
             component: list[ImageMeta] = []
+            stack = [start]
             while stack:
                 v = stack.pop()
                 if visited[v]:
@@ -469,24 +667,63 @@ class DuplicateFinder:
                 for nb in graph[v]:
                     if not visited[nb]:
                         stack.append(nb)
-            if len(component) > 1:
+            if len(component) >= 2:
                 groups.append(component)
 
         return groups
 
 
-# ------------------- Запись JSON-отчёта -------------------
+# ─── Отчёт ──────────────────────────────────────────────────────────────────
 class ReportWriter:
+    """JSON-отчёт с группами дубликатов и попарными оценками сходства."""
+
     @staticmethod
-    def save(groups: list[list[ImageMeta]], output_path: Path, params: dict[str, Any]) -> Path:
+    def save(result: FindResult, output_path: Path, params: dict[str, Any]) -> Path:
+        path_to_idx: dict[str, int] = {}
+        idx_to_path: dict[int, str] = {}
+        for i, it in enumerate(result.valid_items):
+            path_to_idx[str(it.path)] = i
+            idx_to_path[i] = str(it.path)
+
+        # Индекс сходства по упорядоченной паре (min, max)
+        pair_sim: dict[tuple[int, int], DuplicateMatch] = {}
+        for m in result.matches:
+            key = (min(m.idx_a, m.idx_b), max(m.idx_a, m.idx_b))
+            if key not in pair_sim or m.rmse < pair_sim[key].rmse:
+                pair_sim[key] = m
+
         data = []
-        for i, group in enumerate(groups, 1):
+        for gi, group in enumerate(result.groups, 1):
             group.sort(key=lambda x: x.size, reverse=True)
-            files_data = [{"path": str(f.path), "name": f.name, "size": f.size} for f in group]
-            data.append({"group_id": i, "count": len(files_data), "files": files_data})
+            files_data = [
+                {"path": str(f.path), "name": f.name, "size": f.size} for f in group
+            ]
+
+            # Попарные оценки внутри группы
+            group_indices = sorted(
+                path_to_idx[str(f.path)] for f in group if str(f.path) in path_to_idx
+            )
+            pairs = []
+            for ai in range(len(group_indices)):
+                for bi in range(ai + 1, len(group_indices)):
+                    key = (group_indices[ai], group_indices[bi])
+                    if key in pair_sim:
+                        m = pair_sim[key]
+                        pairs.append(
+                            {
+                                "file_a": idx_to_path[m.idx_a],
+                                "file_b": idx_to_path[m.idx_b],
+                                "rmse": round(m.rmse, 4),
+                                "max_joint_dist": round(m.max_joint_dist, 4),
+                            }
+                        )
+
+            data.append(
+                {"group_id": gi, "count": len(files_data), "files": files_data, "pairs": pairs}
+            )
 
         report = {
-            "version": 2,
+            "version": 3,
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "params": params,
             "total_groups": len(data),
@@ -499,16 +736,24 @@ class ReportWriter:
         return output_path
 
 
-# ------------------- Главный класс приложения -------------------
+# ─── Приложение ─────────────────────────────────────────────────────────────
 class App:
+    """Главный класс CLI-приложения."""
+
     def __init__(self, args: argparse.Namespace):
         self.args = args
         setup_logging(args.debug, args.quiet)
+        _init_torch()
+
         self.target_dir = Path(args.directory).resolve()
         self.model = self._load_model(args.device)
         self.pose_extractor = PoseExtractor(self.model, device=args.device)
 
-        cache_path = None if args.no_cache else self.target_dir / POSE_CACHE_FILE
+        if args.no_cache:
+            cache_path = None
+        else:
+            cf = Path(args.cache_file)
+            cache_path = cf if cf.is_absolute() else self.target_dir / cf
         self.cache = PoseCache(cache_path, self.target_dir)
 
         self.finder = DuplicateFinder(
@@ -517,6 +762,7 @@ class App:
             pose_threshold=args.pose_threshold,
             max_joint_dist=args.max_joint_dist,
             min_common_joints=args.min_common_joints,
+            min_group_size=args.min_group_size,
             num_workers=args.workers,
         )
 
@@ -527,20 +773,18 @@ class App:
             kwargs: dict[str, Any] = {}
             if device != "auto":
                 kwargs["device"] = device
-
             if hasattr(DwposeDetector, "from_pretrained_default"):
                 model = DwposeDetector.from_pretrained_default(**kwargs)
             else:
                 model = DwposeDetector(**kwargs)
-
-            log.info("✅ Модель успешно загружена.")
+            log.info("✅ Модель загружена.")
             return model
         except Exception as e:
             raise RuntimeError(f"Не удалось загрузить DWPose: {e}") from e
 
     def run(self) -> None:
         if not self.target_dir.is_dir():
-            log.error("❌ Директория '%s' не найдена.", self.target_dir)
+            log.error("❌ Директория не найдена: %s", self.target_dir)
             sys.exit(1)
 
         files = ImageCollector.collect(self.target_dir, recursive=self.args.recursive)
@@ -551,7 +795,7 @@ class App:
         log.info("📂 Найдено %d изображений.", len(files))
 
         try:
-            groups = self.finder.find(files)
+            result = self.finder.find(files)
         except KeyboardInterrupt:
             log.warning("⛔ Прервано пользователем.")
             sys.exit(130)
@@ -559,55 +803,110 @@ class App:
             log.critical("💥 Критическая ошибка: %s", e, exc_info=self.args.debug)
             sys.exit(1)
 
-        if not groups:
+        if not result.groups:
             log.info("✅ Дубликаты по позе не найдены.")
             sys.exit(0)
+
+        # Фильтрация по минимальному размеру группы
+        if self.args.min_group_size > 2:
+            result.groups = [g for g in result.groups if len(g) >= self.args.min_group_size]
+            if not result.groups:
+                log.info(
+                    "✅ Нет групп размером ≥ %d (попробуйте --min-group-size 2).",
+                    self.args.min_group_size,
+                )
+                sys.exit(0)
 
         output_path = self.target_dir / self.args.output
         params = {
             "pose_threshold": self.args.pose_threshold,
             "max_joint_dist": self.args.max_joint_dist,
             "min_common_joints": self.args.min_common_joints,
+            "min_group_size": self.args.min_group_size,
             "workers": self.args.workers,
             "recursive": self.args.recursive,
         }
-        json_path = ReportWriter.save(groups, output_path, params)
+        json_path = ReportWriter.save(result, output_path, params)
 
         if not self.args.quiet:
-            print(f"\n✅ Готово. JSON отчёт: {json_path}")
-            print(f"💡 Чтобы посмотреть результат, откройте view_duplicates.html и загрузите {self.args.output}")
-            total_dup_files = sum(len(g) for g in groups)
-            print(f"📊 Найдено {len(groups)} групп, всего {total_dup_files} файлов.")
+            total_dup = sum(len(g) for g in result.groups)
+            print(f"\n✅ Готово. JSON: {json_path}")
+            print(f"📊 Найдено {len(result.groups)} групп, всего {total_dup} файлов.")
 
 
-# ------------------- CLI -------------------
+# ─── CLI ────────────────────────────────────────────────────────────────────
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Поиск дубликатов изображений по позе человека (DWPose).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("directory", nargs="?", default=".", help="Директория с изображениями.")
-    parser.add_argument("--recursive", "-r", action="store_true", help="Сканировать подпапки.")
+    parser.add_argument(
+        "directory", nargs="?", default=".", help="Директория с изображениями."
+    )
+    parser.add_argument(
+        "--recursive", "-r", action="store_true", help="Сканировать подпапки."
+    )
 
     cmp = parser.add_argument_group("Параметры сравнения")
-    cmp.add_argument("--pose-threshold", type=float, default=DEFAULT_POSE_THRESHOLD,
-                     help="Порог взвешенного RMSE для признания дубликатом.")
-    cmp.add_argument("--max-joint-dist", type=float, default=DEFAULT_MAX_JOINT_DIST,
-                     help="Макс. отклонение одного сустава (после нормализации).")
-    cmp.add_argument("--min-common-joints", type=int, default=DEFAULT_MIN_COMMON_JOINTS,
-                     help="Мин. число общих уверенных точек для сравнения.")
+    cmp.add_argument(
+        "--pose-threshold",
+        type=float,
+        default=DEFAULT_POSE_THRESHOLD,
+        help="Порог взвешенного RMSE.",
+    )
+    cmp.add_argument(
+        "--max-joint-dist",
+        type=float,
+        default=DEFAULT_MAX_JOINT_DIST,
+        help="Макс. отклонение одного сустава (после нормализации).",
+    )
+    cmp.add_argument(
+        "--min-common-joints",
+        type=int,
+        default=DEFAULT_MIN_COMMON_JOINTS,
+        help="Мин. число общих уверенных точек.",
+    )
+    cmp.add_argument(
+        "--min-group-size",
+        type=int,
+        default=DEFAULT_MIN_GROUP_SIZE,
+        help="Мин. размер группы для включения в отчёт.",
+    )
 
     perf = parser.add_argument_group("Производительность")
-    perf.add_argument("--workers", "-w", type=int, default=1,
-                      help="Потоки для извлечения поз (рекомендуется 1 для GPU).")
-    perf.add_argument("--no-cache", action="store_true", help="Отключить кеширование поз.")
-    perf.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"],
-                      help="Устройство для инференса модели.")
+    perf.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=1,
+        help="I/O-потоки при извлечении (GPU-инференс всегда сериализован).",
+    )
+    perf.add_argument(
+        "--no-cache", action="store_true", help="Отключить кеш поз."
+    )
+    perf.add_argument(
+        "--cache-file",
+        default=POSE_CACHE_FILE,
+        help="Файл кеша (относительно целевой директории или абсолютный путь).",
+    )
+    perf.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="Устройство инференса.",
+    )
 
     out = parser.add_argument_group("Вывод")
-    out.add_argument("--output", "-o", default=DEFAULT_JSON_REPORT, help="Имя JSON-отчёта.")
-    out.add_argument("--debug", action="store_true", help="Подробный вывод (DEBUG).")
-    out.add_argument("--quiet", "-q", action="store_true", help="Минимальный вывод (только ошибки).")
+    out.add_argument(
+        "--output", "-o", default=DEFAULT_JSON_REPORT, help="Имя JSON-отчёта."
+    )
+    out.add_argument(
+        "--debug", action="store_true", help="Подробный вывод (DEBUG)."
+    )
+    out.add_argument(
+        "--quiet", "-q", action="store_true", help="Минимальный вывод (только ошибки)."
+    )
 
     args = parser.parse_args()
 
@@ -618,8 +917,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--pose-threshold должен быть > 0")
     if args.max_joint_dist <= 0:
         parser.error("--max-joint-dist должен быть > 0")
-    if not (1 <= args.min_common_joints <= 18):
-        parser.error("--min-common-joints должен быть в диапазоне [1, 18]")
+    if not (1 <= args.min_common_joints <= NUM_KEYPOINTS):
+        parser.error(f"--min-common-joints должен быть в диапазоне [1, {NUM_KEYPOINTS}]")
+    if args.min_group_size < 2:
+        parser.error("--min-group-size должен быть ≥ 2")
 
     return args
 
