@@ -1,222 +1,1428 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Просмотр дубликатов по позе (DWPose)</title>
     <style>
-        :root { --primary: #4a90e2; --danger: #e74c3c; --bg: #f5f7fa; --card: #ffffff; --text: #333; --border: #e0e0e0; }
-        body { font-family: system-ui, -apple-system, sans-serif; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; background: var(--bg); color: var(--text); }
-        h1 { margin: 0 0 0.5rem; font-size: 1.5rem; }
-        .meta { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
-        .controls { position: sticky; top: 0; background: var(--bg); padding: 1rem 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--border); }
-        .upload-section { margin-bottom: 1.5rem; }
-        .upload-area { border: 2px dashed #aaa; padding: 2rem; text-align: center; border-radius: 8px; background: var(--card); cursor: pointer; transition: 0.2s; margin-bottom: 1rem; }
-        .upload-area:hover, .upload-area.dragover { border-color: var(--primary); background: #f0f7ff; }
-        .folder-upload { border: 2px dashed #27ae60; padding: 1rem; text-align: center; border-radius: 8px; background: var(--card); cursor: pointer; transition: 0.2s; }
-        .folder-upload:hover { border-color: #229954; background: #f0fff4; }
-        .group { background: var(--card); margin: 1rem 0; padding: 1rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .group-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
-        .file-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem; }
-        .file-item { display: flex; align-items: flex-start; padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; transition: all 0.2s; gap: 1rem; }
-        .file-item:hover { background: #fafafa; border-color: var(--primary); }
-        .file-item input[type="checkbox"] { margin-top: 0.3rem; width: 18px; height: 18px; cursor: pointer; accent-color: var(--primary); flex-shrink: 0; }
-        .thumbnail { width: 100px; height: 100px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); background: #f5f5f5; flex-shrink: 0; }
-        .thumbnail.error { display: flex; align-items: center; justify-content: center; background: #f0f0f0; color: #999; font-size: 0.75rem; }
-        .file-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
-        .file-name { font-weight: 500; word-break: break-all; font-size: 0.9rem; }
-        .file-path { color: #888; font-size: 0.8rem; word-break: break-all; }
-        .file-size { color: #666; font-size: 0.85rem; font-weight: 500; }
-        .btn { padding: 0.6rem 1.2rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.95rem; font-weight: 600; transition: 0.2s; display: inline-flex; align-items: center; gap: 0.5rem; }
+        :root {
+            --primary: #4a90e2;
+            --primary-hover: #357abd;
+            --danger: #e74c3c;
+            --danger-hover: #c0392b;
+            --success: #27ae60;
+            --warning: #f39c12;
+            --bg: #f0f2f5;
+            --bg-secondary: #e8eaed;
+            --card: #ffffff;
+            --card-hover: #f8f9fa;
+            --text: #1a1a2e;
+            --text-secondary: #6b7280;
+            --text-muted: #9ca3af;
+            --border: #e0e0e0;
+            --border-focus: #4a90e2;
+            --shadow: 0 2px 8px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+            --radius: 10px;
+            --radius-sm: 6px;
+            --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            --font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        [data-theme="dark"] {
+            --bg: #0f1117;
+            --bg-secondary: #1a1d27;
+            --card: #1e2130;
+            --card-hover: #252839;
+            --text: #e4e6eb;
+            --text-secondary: #a0a3b1;
+            --text-muted: #6b6f82;
+            --border: #2d3148;
+            --shadow: 0 2px 8px rgba(0,0,0,0.3);
+            --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: var(--font);
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 1.5rem;
+            background: var(--bg);
+            color: var(--text);
+            transition: background var(--transition), color var(--transition);
+            line-height: 1.5;
+        }
+
+        /* ===== HEADER ===== */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .page-header h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary), #7c3aed);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .icon-btn {
+            width: 40px;
+            height: 40px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            transition: all var(--transition);
+        }
+
+        .icon-btn:hover {
+            background: var(--card-hover);
+            color: var(--text);
+            border-color: var(--primary);
+        }
+
+        .meta {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .meta-tag {
+            background: var(--bg-secondary);
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        /* ===== STATS BAR ===== */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1rem 1.25rem;
+            box-shadow: var(--shadow);
+            transition: all var(--transition);
+        }
+
+        .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+
+        .stat-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-value.danger { color: var(--danger); }
+        .stat-value.success { color: var(--success); }
+
+        /* ===== CONTROLS BAR ===== */
+        .controls {
+            position: sticky;
+            top: 0;
+            background: var(--bg);
+            padding: 1rem 0;
+            z-index: 100;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--border);
+            margin-bottom: 1.5rem;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+
+        .controls-left {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            align-items: center;
+            flex: 1;
+        }
+
+        .controls-right {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .search-box {
+            position: relative;
+            flex: 1;
+            min-width: 200px;
+            max-width: 400px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 0.6rem 1rem 0.6rem 2.5rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--card);
+            color: var(--text);
+            font-size: 0.9rem;
+            transition: all var(--transition);
+            font-family: var(--font);
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.15);
+        }
+
+        .search-box .search-icon {
+            position: absolute;
+            left: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            pointer-events: none;
+        }
+
+        .sort-select {
+            padding: 0.6rem 2rem 0.6rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--card);
+            color: var(--text);
+            font-size: 0.85rem;
+            cursor: pointer;
+            font-family: var(--font);
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 0.75rem center;
+            transition: all var(--transition);
+        }
+
+        .sort-select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* ===== BUTTONS ===== */
+        .btn {
+            padding: 0.6rem 1.25rem;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-family: var(--font);
+            white-space: nowrap;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(255,255,255,0.1);
+            opacity: 0;
+            transition: opacity var(--transition);
+        }
+
+        .btn:hover::after { opacity: 1; }
+
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-primary:hover:not(:disabled) { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(74,144,226,0.3); }
+
         .btn-danger { background: var(--danger); color: #fff; }
-        .btn-danger:hover:not(:disabled) { background: #c0392b; transform: translateY(-1px); }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        .badge { background: #eef2f7; padding: 0.25rem 0.6rem; border-radius: 12px; font-size: 0.85rem; font-weight: 500; }
-        .status { margin-top: 1rem; padding: 0.75rem; border-radius: 6px; display: none; font-weight: 500; }
-        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        #fileInfo { font-size: 0.95rem; color: #555; }
-        .loading { color: var(--primary); font-style: italic; }
+        .btn-danger:hover:not(:disabled) { background: var(--danger-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(231,76,60,0.3); }
+
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-success:hover:not(:disabled) { background: #219a52; transform: translateY(-1px); }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+        .btn-outline:hover:not(:disabled) {
+            background: var(--card-hover);
+            color: var(--text);
+            border-color: var(--primary);
+        }
+
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
+
+        .btn-sm { padding: 0.4rem 0.75rem; font-size: 0.8rem; }
+
+        /* ===== UPLOAD AREAS ===== */
+        .upload-section { margin-bottom: 1.5rem; }
+
+        .upload-area {
+            border: 2px dashed var(--border);
+            padding: 2.5rem 2rem;
+            text-align: center;
+            border-radius: var(--radius);
+            background: var(--card);
+            cursor: pointer;
+            transition: all var(--transition);
+            position: relative;
+        }
+
+        .upload-area:hover, .upload-area.dragover {
+            border-color: var(--primary);
+            background: rgba(74, 144, 226, 0.05);
+            transform: scale(1.01);
+        }
+
+        .upload-area.dragover {
+            border-color: var(--primary);
+            background: rgba(74, 144, 226, 0.1);
+            box-shadow: 0 0 0 4px rgba(74, 144, 226, 0.15);
+        }
+
+        .upload-area p { font-size: 1rem; color: var(--text-secondary); }
+        .upload-area p code {
+            background: var(--bg-secondary);
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+
+        .upload-area .upload-icon {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        .folder-upload {
+            border: 2px dashed var(--success);
+            padding: 1.5rem;
+            text-align: center;
+            border-radius: var(--radius);
+            background: var(--card);
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+
+        .folder-upload:hover, .folder-upload.dragover {
+            border-color: #219a52;
+            background: rgba(39, 174, 96, 0.05);
+        }
+
+        .folder-upload.dragover {
+            box-shadow: 0 0 0 4px rgba(39, 174, 96, 0.15);
+        }
+
+        /* ===== GROUPS ===== */
+        .group {
+            background: var(--card);
+            margin: 1rem 0;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            overflow: hidden;
+            transition: all var(--transition);
+            animation: fadeInUp 0.3s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .group:hover { box-shadow: var(--shadow-lg); }
+
+        .group-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.25rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            user-select: none;
+            transition: background var(--transition);
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .group-header:hover { background: var(--card-hover); }
+
+        .group-header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .group-toggle {
+            transition: transform var(--transition);
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .group.collapsed .group-toggle { transform: rotate(-90deg); }
+        .group.collapsed .file-list { display: none; }
+
+        .group-title {
+            font-weight: 700;
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .group-header-right {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-shrink: 0;
+        }
+
+        .badge {
+            background: rgba(74, 144, 226, 0.12);
+            color: var(--primary);
+            padding: 0.2rem 0.65rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .badge-danger { background: rgba(231,76,60,0.12); color: var(--danger); }
+
+        .group-size {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .group-select-label {
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.3rem 0.6rem;
+            border-radius: var(--radius-sm);
+            transition: all var(--transition);
+        }
+
+        .group-select-label:hover { background: var(--card); color: var(--text); }
+
+        .group-select-label input[type="checkbox"] {
+            accent-color: var(--primary);
+            width: 16px;
+            height: 16px;
+        }
+
+        /* ===== FILE LIST ===== */
+        .file-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: grid;
+            gap: 0;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            transition: all var(--transition);
+            gap: 1rem;
+            position: relative;
+        }
+
+        .file-item:last-child { border-bottom: none; }
+        .file-item:hover { background: var(--card-hover); }
+        .file-item.selected { background: rgba(74, 144, 226, 0.06); }
+        .file-item.deleting { opacity: 0.4; pointer-events: none; }
+
+        .file-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: var(--primary);
+            flex-shrink: 0;
+        }
+
+        .thumbnail-container {
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .thumbnail {
+            width: 80px;
+            height: 80px;
+            object-fit: cover;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--bg-secondary);
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+
+        .thumbnail:hover {
+            transform: scale(1.05);
+            box-shadow: var(--shadow);
+        }
+
+        .thumbnail-placeholder {
+            width: 80px;
+            height: 80px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--bg-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            text-align: center;
+            flex-shrink: 0;
+            line-height: 1.2;
+        }
+
+        .file-info {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+        }
+
+        .file-name {
+            font-weight: 600;
+            word-break: break-all;
+            font-size: 0.9rem;
+        }
+
+        .file-path {
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            word-break: break-all;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .file-meta {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .file-size {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 0.35rem;
+            margin-left: auto;
+            flex-shrink: 0;
+            opacity: 0;
+            transition: opacity var(--transition);
+        }
+
+        .file-item:hover .file-actions { opacity: 1; }
+
+        .file-action-btn {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            transition: all var(--transition);
+        }
+
+        .file-action-btn:hover {
+            background: var(--danger);
+            color: #fff;
+            border-color: var(--danger);
+        }
+
+        .file-action-btn.view-btn:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+        }
+
+        /* ===== LIGHTBOX / MODAL ===== */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            animation: fadeIn 0.2s ease;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-content {
+            max-width: 90vw;
+            max-height: 90vh;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .modal-content img {
+            max-width: 100%;
+            max-height: 80vh;
+            object-fit: contain;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .modal-close {
+            position: absolute;
+            top: -2.5rem;
+            right: 0;
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.15);
+            color: #fff;
+            font-size: 1.5rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition);
+        }
+
+        .modal-close:hover { background: rgba(255,255,255,0.3); transform: scale(1.1); }
+
+        .modal-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 44px;
+            height: 44px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.15);
+            color: #fff;
+            font-size: 1.2rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition);
+        }
+
+        .modal-nav:hover { background: rgba(255,255,255,0.3); }
+        .modal-nav.prev { left: -3.5rem; }
+        .modal-nav.next { right: -3.5rem; }
+
+        .modal-info {
+            margin-top: 1rem;
+            color: rgba(255,255,255,0.8);
+            font-size: 0.9rem;
+            text-align: center;
+        }
+
+        /* ===== CONFIRM MODAL ===== */
+        .confirm-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1001;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            backdrop-filter: blur(4px);
+        }
+
+        .confirm-overlay.active { display: flex; }
+
+        .confirm-dialog {
+            background: var(--card);
+            border-radius: var(--radius);
+            padding: 2rem;
+            max-width: 420px;
+            width: 100%;
+            box-shadow: var(--shadow-lg);
+            animation: scaleIn 0.2s ease;
+        }
+
+        @keyframes scaleIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .confirm-dialog h3 {
+            font-size: 1.15rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .confirm-dialog p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .confirm-actions {
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+        }
+
+        /* ===== TOAST NOTIFICATIONS ===== */
+        .toast-container {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            pointer-events: none;
+        }
+
+        .toast {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.85rem 1.25rem;
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            min-width: 280px;
+            max-width: 420px;
+            pointer-events: auto;
+            animation: slideInRight 0.3s ease;
+            transition: all 0.3s ease;
+        }
+
+        @keyframes slideInRight {
+            from { opacity: 0; transform: translateX(100%); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .toast.removing {
+            opacity: 0;
+            transform: translateX(100%);
+        }
+
+        .toast.success { border-left: 4px solid var(--success); }
+        .toast.error { border-left: 4px solid var(--danger); }
+        .toast.info { border-left: 4px solid var(--primary); }
+        .toast.warning { border-left: 4px solid var(--warning); }
+
+        .toast-icon { font-size: 1.2rem; flex-shrink: 0; }
+        .toast-message { flex: 1; }
+
+        .toast-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 1rem;
+            padding: 0.2rem;
+            flex-shrink: 0;
+        }
+
+        /* ===== PROGRESS BAR ===== */
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: var(--bg-secondary);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 1rem 0;
+            display: none;
+        }
+
+        .progress-bar.active { display: block; }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #7c3aed);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        /* ===== EMPTY STATE ===== */
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--text-muted);
+        }
+
+        .empty-state .empty-icon { font-size: 3rem; margin-bottom: 1rem; }
+        .empty-state h3 { font-size: 1.1rem; color: var(--text-secondary); margin-bottom: 0.5rem; }
+
+        /* ===== KEYBOARD HINTS ===== */
+        kbd {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.1rem 0.4rem;
+            font-size: 0.75rem;
+            font-family: var(--font);
+            color: var(--text-muted);
+        }
+
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 768px) {
+            body { padding: 1rem; }
+            .page-header h1 { font-size: 1.35rem; }
+            .controls { flex-direction: column; align-items: stretch; }
+            .controls-left { flex-direction: column; }
+            .search-box { max-width: 100%; }
+            .file-item { flex-wrap: wrap; padding: 0.75rem; }
+            .thumbnail, .thumbnail-placeholder { width: 64px; height: 64px; }
+            .file-actions { opacity: 1; }
+            .modal-nav.prev { left: 0.5rem; }
+            .modal-nav.next { right: 0.5rem; }
+            .stats-bar { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 480px) {
+            .stats-bar { grid-template-columns: 1fr; }
+            .group-header { flex-direction: column; align-items: flex-start; }
+        }
+
+        /* ===== SCROLLBAR ===== */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* ===== SKELETON LOADING ===== */
+        .skeleton {
+            background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--card-hover) 50%, var(--bg-secondary) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+            border-radius: var(--radius-sm);
+        }
+
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* ===== HIGHLIGHT ===== */
+        mark {
+            background: rgba(74, 144, 226, 0.25);
+            color: inherit;
+            border-radius: 2px;
+            padding: 0 2px;
+        }
     </style>
 </head>
 <body>
-    <h1>🔍 Отчёт о дубликатах по позе</h1>
-    <div class="meta" id="metaInfo">Загрузите JSON файл для начала работы</div>
-
-    <div class="controls">
-        <div id="fileInfo">Ожидание файлов...</div>
-        <button id="deleteBtn" class="btn btn-danger" disabled>🗑️ Удалить отмеченное</button>
+    <!-- HEADER -->
+    <div class="page-header">
+        <div>
+            <h1>🔍 Отчёт о дубликатах по позе</h1>
+            <div class="meta" id="metaInfo">
+                Загрузите JSON файл для начала работы
+            </div>
+        </div>
+        <div class="header-actions">
+            <button class="icon-btn" id="themeToggle" title="Переключить тему">🌙</button>
+            <button class="icon-btn" id="keyboardHelp" title="Горячие клавиши">⌨️</button>
+        </div>
     </div>
 
-    <div class="upload-section">
+    <!-- STATS BAR -->
+    <div class="stats-bar" id="statsBar" style="display: none;">
+        <div class="stat-card">
+            <div class="stat-label">Группы</div>
+            <div class="stat-value" id="statGroups">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Всего файлов</div>
+            <div class="stat-value" id="statFiles">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Общий размер</div>
+            <div class="stat-value" id="statSize">0 MB</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Можно освободить</div>
+            <div class="stat-value danger" id="statSavings">0 MB</div>
+        </div>
+    </div>
+
+    <!-- UPLOAD SECTION -->
+    <div class="upload-section" id="uploadSection">
         <div id="jsonDropZone" class="upload-area">
-            <p>📄 Перетащите <code>duplicates.json</code> сюда или <a href="#" onclick="document.getElementById('jsonInput').click()">выберите файл</a></p>
+            <span class="upload-icon">📄</span>
+            <p>Перетащите <code>duplicates.json</code> сюда</p>
+            <p style="margin-top: 0.5rem; font-size: 0.85rem;">или <a href="#" onclick="document.getElementById('jsonInput').click(); return false;" style="color: var(--primary);">выберите файл</a></p>
             <input type="file" id="jsonInput" accept=".json" style="display: none;">
         </div>
-
         <div id="folderDropZone" class="folder-upload" style="display: none;">
-            <p>📁 <strong>Для просмотра миниатюр:</strong> выберите папку с изображениями или перетащите её сюда</p>
+            <p>📁 <strong>Для просмотра миниатюр:</strong> перетащите папку с изображениями или <a href="#" onclick="document.getElementById('folderInput').click(); return false;" style="color: var(--success);">выберите папку</a></p>
             <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
         </div>
     </div>
 
+    <!-- PROGRESS BAR -->
+    <div class="progress-bar" id="progressBar">
+        <div class="progress-fill" id="progressFill"></div>
+    </div>
+
+    <!-- CONTROLS -->
+    <div class="controls" id="controlsBar" style="display: none;">
+        <div class="controls-left">
+            <div class="search-box">
+                <span class="search-icon">🔎</span>
+                <input type="text" id="searchInput" placeholder="Поиск по имени или пути файла...">
+            </div>
+            <select class="sort-select" id="sortSelect">
+                <option value="default">Сортировка: по умолчанию</option>
+                <option value="name-asc">Имя: А → Я</option>
+                <option value="name-desc">Имя: Я → А</option>
+                <option value="size-asc">Размер: ↑</option>
+                <option value="size-desc">Размер: ↓</option>
+                <option value="count-desc">Группы: больше файлов</option>
+                <option value="count-asc">Группы: меньше файлов</option>
+            </select>
+        </div>
+        <div class="controls-right">
+            <button class="btn btn-outline btn-sm" id="expandAllBtn">📂 Развернуть все</button>
+            <button class="btn btn-outline btn-sm" id="collapseAllBtn">📁 Свернуть все</button>
+            <button class="btn btn-outline btn-sm" id="exportBtn">📋 Экспорт</button>
+            <button class="btn btn-danger" id="deleteBtn" disabled>🗑️ Удалить (<span id="selectedCount">0</span>)</button>
+        </div>
+    </div>
+
+    <!-- GROUPS CONTAINER -->
     <div id="groupsContainer"></div>
-    <div id="statusMsg" class="status"></div>
+
+    <!-- EMPTY STATE -->
+    <div class="empty-state" id="emptyState" style="display: none;">
+        <div class="empty-icon">🔎</div>
+        <h3>Ничего не найдено</h3>
+        <p>Попробуйте изменить параметры поиска</p>
+    </div>
+
+    <!-- LIGHTBOX MODAL -->
+    <div class="modal-overlay" id="lightboxModal">
+        <div class="modal-content">
+            <button class="modal-close" id="lightboxClose">✕</button>
+            <button class="modal-nav prev" id="lightboxPrev">◀</button>
+            <button class="modal-nav next" id="lightboxNext">▶</button>
+            <img id="lightboxImage" src="" alt="">
+            <div class="modal-info" id="lightboxInfo"></div>
+        </div>
+    </div>
+
+    <!-- CONFIRM MODAL -->
+    <div class="confirm-overlay" id="confirmModal">
+        <div class="confirm-dialog">
+            <h3>⚠️ Подтверждение удаления</h3>
+            <p id="confirmText">Вы уверены?</p>
+            <div class="confirm-actions">
+                <button class="btn btn-outline" id="confirmCancel">Отмена</button>
+                <button class="btn btn-danger" id="confirmOk">Удалить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div class="toast-container" id="toastContainer"></div>
 
     <script>
-        const jsonInput = document.getElementById('jsonInput');
-        const folderInput = document.getElementById('folderInput');
-        const jsonDropZone = document.getElementById('jsonDropZone');
-        const folderDropZone = document.getElementById('folderDropZone');
-        const groupsContainer = document.getElementById('groupsContainer');
-        const deleteBtn = document.getElementById('deleteBtn');
-        const statusMsg = document.getElementById('statusMsg');
-        const metaInfo = document.getElementById('metaInfo');
-        const fileInfo = document.getElementById('fileInfo');
+        // ===== DOM ELEMENTS =====
+        const $ = id => document.getElementById(id);
+        const jsonInput = $('jsonInput');
+        const folderInput = $('folderInput');
+        const jsonDropZone = $('jsonDropZone');
+        const folderDropZone = $('folderDropZone');
+        const groupsContainer = $('groupsContainer');
+        const deleteBtn = $('deleteBtn');
+        const selectedCountEl = $('selectedCount');
+        const metaInfo = $('metaInfo');
+        const searchInput = $('searchInput');
+        const sortSelect = $('sortSelect');
+        const controlsBar = $('controlsBar');
+        const statsBar = $('statsBar');
+        const uploadSection = $('uploadSection');
+        const progressBar = $('progressBar');
+        const progressFill = $('progressFill');
+        const emptyState = $('emptyState');
+        const lightboxModal = $('lightboxModal');
+        const lightboxImage = $('lightboxImage');
+        const lightboxInfo = $('lightboxInfo');
+        const confirmModal = $('confirmModal');
+        const toastContainer = $('toastContainer');
 
+        // ===== STATE =====
         let selectedFiles = new Set();
         let fileData = null;
-        let imageCache = new Map(); // Кэш для object URLs
+        let imageCache = new Map();
+        let allImages = []; // For lightbox navigation
+        let currentLightboxIndex = 0;
+        let searchQuery = '';
+        let currentSort = 'default';
 
-        // JSON Drag & Drop
-        jsonDropZone.addEventListener('dragover', e => { e.preventDefault(); jsonDropZone.classList.add('dragover'); });
-        jsonDropZone.addEventListener('dragleave', () => jsonDropZone.classList.remove('dragover'));
-        jsonDropZone.addEventListener('drop', e => {
-            e.preventDefault();
-            jsonDropZone.classList.remove('dragover');
-            if (e.dataTransfer.files.length) handleJSONFile(e.dataTransfer.files[0]);
+        // ===== THEME =====
+        const themeToggle = $('themeToggle');
+        const savedTheme = localStorage.getItem('dwp-theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        themeToggle.textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+
+        themeToggle.addEventListener('click', () => {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('dwp-theme', next);
+            themeToggle.textContent = next === 'dark' ? '☀️' : '🌙';
         });
+
+        // ===== TOAST NOTIFICATIONS =====
+        function showToast(message, type = 'info', duration = 5000) {
+            const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <span class="toast-icon">${icons[type]}</span>
+                <span class="toast-message">${message}</span>
+                <button class="toast-close" onclick="this.parentElement.classList.add('removing'); setTimeout(() => this.parentElement.remove(), 300);">✕</button>
+            `;
+            toastContainer.appendChild(toast);
+            if (duration > 0) {
+                setTimeout(() => {
+                    toast.classList.add('removing');
+                    setTimeout(() => toast.remove(), 300);
+                }, duration);
+            }
+        }
+
+        // ===== CONFIRM DIALOG =====
+        function showConfirm(message) {
+            return new Promise(resolve => {
+                $('confirmText').textContent = message;
+                confirmModal.classList.add('active');
+                const ok = () => { confirmModal.classList.remove('active'); cleanup(); resolve(true); };
+                const cancel = () => { confirmModal.classList.remove('active'); cleanup(); resolve(false); };
+                const cleanup = () => {
+                    $('confirmOk').removeEventListener('click', ok);
+                    $('confirmCancel').removeEventListener('click', cancel);
+                    confirmModal.removeEventListener('click', overlayClick);
+                    document.removeEventListener('keydown', keyHandler);
+                };
+                const overlayClick = e => { if (e.target === confirmModal) cancel(); };
+                const keyHandler = e => { if (e.key === 'Escape') cancel(); };
+                $('confirmOk').addEventListener('click', ok);
+                $('confirmCancel').addEventListener('click', cancel);
+                confirmModal.addEventListener('click', overlayClick);
+                document.addEventListener('keydown', keyHandler);
+            });
+        }
+
+        // ===== DRAG & DROP =====
+        function setupDropZone(zone, handler) {
+            zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+            zone.addEventListener('dragleave', e => {
+                if (!zone.contains(e.relatedTarget)) zone.classList.remove('dragover');
+            });
+            zone.addEventListener('drop', e => {
+                e.preventDefault();
+                zone.classList.remove('dragover');
+                if (e.dataTransfer.files.length) handler(e.dataTransfer.files);
+            });
+        }
+
+        setupDropZone(jsonDropZone, files => handleJSONFile(files[0]));
+        setupDropZone(folderDropZone, files => handleFolderFiles(files));
         jsonInput.addEventListener('change', e => { if (e.target.files.length) handleJSONFile(e.target.files[0]); });
-
-        // Folder Drag & Drop
-        folderDropZone.addEventListener('dragover', e => { e.preventDefault(); folderDropZone.classList.add('dragover'); });
-        folderDropZone.addEventListener('dragleave', () => folderDropZone.classList.remove('dragover'));
-        folderDropZone.addEventListener('drop', e => {
-            e.preventDefault();
-            folderDropZone.classList.remove('dragover');
-            if (e.dataTransfer.files.length) handleFolderFiles(e.dataTransfer.files);
-        });
         folderInput.addEventListener('change', e => { if (e.target.files.length) handleFolderFiles(e.target.files); });
 
+        // ===== JSON HANDLING =====
         function handleJSONFile(file) {
-            if (!file.name.endsWith('.json')) {
-                showStatus('❌ Поддерживаются только .json файлы', 'error');
+            if (!file.name.toLowerCase().endsWith('.json')) {
+                showToast('Поддерживаются только .json файлы', 'error');
                 return;
             }
+
+            progressBar.classList.add('active');
+            progressFill.style.width = '20%';
+
             const reader = new FileReader();
-            reader.onload = e => {
-                try {
-                    const rawData = JSON.parse(e.target.result);
-                    fileData = sanitizeKeys(rawData);
-                    renderGroups(fileData);
-                    jsonDropZone.style.display = 'none';
-                    folderDropZone.style.display = 'block';
-                    fileInfo.textContent = `Групп: ${fileData.total_groups}, Файлов: ${fileData.total_files}`;
-                    metaInfo.textContent = `Метод: Прямое сравнение DWPose без предварительного хэширования.`;
-                } catch (err) {
-                    showStatus('❌ Ошибка парсинга JSON: ' + err.message, 'error');
+            reader.onprogress = e => {
+                if (e.lengthComputable) {
+                    progressFill.style.width = `${20 + (e.loaded / e.total) * 60}%`;
                 }
             };
+
+            reader.onload = e => {
+                progressFill.style.width = '85%';
+                try {
+                    const rawData = JSON.parse(e.target.result);
+                    fileData = sanitizeData(rawData);
+                    progressFill.style.width = '95%';
+
+                    renderGroups(fileData);
+                    updateStats(fileData);
+
+                    uploadSection.style.display = 'none';
+                    controlsBar.style.display = 'flex';
+                    statsBar.style.display = 'grid';
+                    folderDropZone.style.display = 'block';
+                    uploadSection.appendChild(folderDropZone);
+                    uploadSection.style.display = 'block';
+                    jsonDropZone.style.display = 'none';
+
+                    metaInfo.innerHTML = `
+                        <span class="meta-tag">📊 Групп: ${fileData.total_groups || fileData.groups.length}</span>
+                        <span class="meta-tag">📁 Файлов: ${fileData.total_files || countTotalFiles(fileData)}</span>
+                        <span class="meta-tag">🧬 Метод: DWPose</span>
+                    `;
+
+                    progressFill.style.width = '100%';
+                    setTimeout(() => { progressBar.classList.remove('active'); }, 500);
+                    showToast(`Загружено ${fileData.groups.length} групп дубликатов`, 'success');
+                } catch (err) {
+                    progressBar.classList.remove('active');
+                    showToast('Ошибка парсинга JSON: ' + err.message, 'error');
+                }
+            };
+
+            reader.onerror = () => {
+                progressBar.classList.remove('active');
+                showToast('Ошибка чтения файла', 'error');
+            };
+
             reader.readAsText(file);
         }
 
-        function handleFolderFiles(files) {
-            const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
-            imageCache.clear();
-
-            // Создаём map: имя файла -> File object
-            imageFiles.forEach(file => {
-                const fileName = file.name.trim();
-                const objectURL = URL.createObjectURL(file);
-                imageCache.set(fileName, objectURL);
-            });
-
-            // Обновляем все миниатюры
-            document.querySelectorAll('.thumbnail').forEach(img => {
-                const fileName = img.dataset.filename;
-                if (imageCache.has(fileName)) {
-                    img.src = imageCache.get(fileName);
-                    img.classList.remove('error');
-                    img.textContent = '';
-                }
-            });
-
-            showStatus(`✅ Загружено ${imageFiles.length} изображений для превью`, 'success');
+        function countTotalFiles(data) {
+            return data.groups.reduce((sum, g) => sum + (g.files ? g.files.length : 0), 0);
         }
 
-        function sanitizeKeys(obj) {
-            if (Array.isArray(obj)) return obj.map(sanitizeKeys);
+        function sanitizeData(obj) {
+            if (Array.isArray(obj)) return obj.map(sanitizeData);
             if (typeof obj === 'object' && obj !== null) {
                 return Object.fromEntries(
-                    Object.entries(obj).map(([k, v]) => [k.trim(), sanitizeKeys(v)])
+                    Object.entries(obj).map(([k, v]) => [k.trim(), sanitizeData(v)])
                 );
             }
+            if (typeof obj === 'string') return obj.trim();
             return obj;
         }
 
-        function renderGroups(data) {
-            groupsContainer.innerHTML = '';
-            selectedFiles.clear();
-
-            if (!data.groups || !Array.isArray(data.groups)) {
-                showStatus('❌ Неверная структура JSON: ожидался массив groups', 'error');
+        // ===== FOLDER HANDLING =====
+        function handleFolderFiles(files) {
+            const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+            if (imageFiles.length === 0) {
+                showToast('Изображения не найдены в выбранной папке', 'warning');
                 return;
             }
 
-            data.groups.forEach(group => {
+            imageCache.clear();
+            let loaded = 0;
+
+            imageFiles.forEach(file => {
+                const fileName = file.name.trim().toLowerCase();
+                const objectURL = URL.createObjectURL(file);
+                imageCache.set(fileName, objectURL);
+                loaded++;
+            });
+
+            // Update all thumbnails
+            document.querySelectorAll('.thumbnail[data-filename]').forEach(img => {
+                const key = img.dataset.filename.toLowerCase();
+                if (imageCache.has(key)) {
+                    img.src = imageCache.get(key);
+                    img.dataset.loaded = 'true';
+                }
+            });
+
+            showToast(`Загружено ${loaded} изображений для превью`, 'success');
+        }
+
+        // ===== STATS =====
+        function updateStats(data) {
+            const groups = data.groups.length;
+            let totalFiles = 0;
+            let totalSize = 0;
+            let savings = 0;
+
+            data.groups.forEach(g => {
+                const count = g.files ? g.files.length : 0;
+                totalFiles += count;
+                g.files.forEach(f => {
+                    totalSize += f.size || 0;
+                });
+                // Savings = keep 1 largest, delete rest
+                if (g.files.length > 1) {
+                    const sizes = g.files.map(f => f.size || 0).sort((a, b) => b - a);
+                    savings += sizes.slice(1).reduce((a, b) => a + b, 0);
+                }
+            });
+
+            $('statGroups').textContent = groups;
+            $('statFiles').textContent = totalFiles;
+            $('statSize').textContent = formatBytes(totalSize);
+            $('statSavings').textContent = formatBytes(savings);
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // ===== RENDER GROUPS =====
+        function renderGroups(data) {
+            groupsContainer.innerHTML = '';
+            selectedFiles.clear();
+            allImages = [];
+
+            if (!data.groups || !Array.isArray(data.groups)) {
+                showToast('Неверная структура JSON: ожидался массив groups', 'error');
+                return;
+            }
+
+            let groups = [...data.groups];
+
+            // Apply sorting
+            if (currentSort === 'count-desc') groups.sort((a, b) => (b.files?.length || 0) - (a.files?.length || 0));
+            else if (currentSort === 'count-asc') groups.sort((a, b) => (a.files?.length || 0) - (b.files?.length || 0));
+
+            let visibleCount = 0;
+
+            groups.forEach((group, groupIdx) => {
+                let files = group.files ? [...group.files] : [];
+
+                // Apply file sorting
+                if (currentSort === 'name-asc') files.sort((a, b) => a.name.localeCompare(b.name));
+                else if (currentSort === 'name-desc') files.sort((a, b) => b.name.localeCompare(a.name));
+                else if (currentSort === 'size-asc') files.sort((a, b) => (a.size || 0) - (b.size || 0));
+                else if (currentSort === 'size-desc') files.sort((a, b) => (b.size || 0) - (a.size || 0));
+
+                // Apply search filter
+                if (searchQuery) {
+                    files = files.filter(f =>
+                        f.name.toLowerCase().includes(searchQuery) ||
+                        f.path.toLowerCase().includes(searchQuery)
+                    );
+                }
+
+                if (files.length === 0 && searchQuery) return;
+                visibleCount++;
+
                 const groupDiv = document.createElement('div');
                 groupDiv.className = 'group';
                 groupDiv.dataset.groupId = group.group_id;
+                groupDiv.style.animationDelay = `${Math.min(groupIdx * 0.05, 0.5)}s`;
 
-                const filesHtml = group.files.map(file => {
-                    const cleanPath = file.path.trim();
-                    const cleanName = file.name.trim();
-                    const sizeKB = (file.size / 1024).toFixed(1);
+                const groupTotalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+
+                const filesHtml = files.map((file, fileIdx) => {
+                    const cleanPath = file.path || '';
+                    const cleanName = file.name || '';
+                    const sizeStr = formatBytes(file.size || 0);
+                    const globalIdx = allImages.length;
+
+                    allImages.push({ src: cleanName, path: cleanPath, name: cleanName });
+
+                    const highlightedName = searchQuery
+                        ? highlightText(cleanName, searchQuery)
+                        : escapeHtml(cleanName);
+
+                    const highlightedPath = searchQuery
+                        ? highlightText(cleanPath, searchQuery)
+                        : escapeHtml(cleanPath);
 
                     return `
-                    <li class="file-item">
-                        <input type="checkbox" class="file-checkbox" value="${cleanPath}" data-group="${group.group_id}">
-                        <div class="thumbnail-container">
-                            <img class="thumbnail"
-                                 data-filename="${cleanName}"
-                                 alt="${cleanName}"
-                                 onerror="this.classList.add('error'); this.textContent='Нет превью'">
-                        </div>
-                        <div class="file-info">
-                            <span class="file-name">${cleanName}</span>
-                            <span class="file-path">${cleanPath}</span>
-                            <span class="file-size">${sizeKB} KB</span>
-                        </div>
-                    </li>
-                `}).join('');
+                        <li class="file-item" data-path="${escapeAttr(cleanPath)}">
+                            <input type="checkbox" class="file-checkbox" value="${escapeAttr(cleanPath)}" data-group="${group.group_id}">
+                            <div class="thumbnail-container">
+                                <img class="thumbnail"
+                                     data-filename="${escapeAttr(cleanName)}"
+                                     data-index="${globalIdx}"
+                                     alt="${escapeAttr(cleanName)}"
+                                     loading="lazy"
+                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                <div class="thumbnail-placeholder" style="display:none;">Нет<br>превью</div>
+                            </div>
+                            <div class="file-info">
+                                <span class="file-name">${highlightedName}</span>
+                                <span class="file-path">${highlightedPath}</span>
+                                <div class="file-meta">
+                                    <span class="file-size">${sizeStr}</span>
+                                </div>
+                            </div>
+                            <div class="file-actions">
+                                <button class="file-action-btn view-btn" data-index="${globalIdx}" title="Просмотр">👁️</button>
+                                <button class="file-action-btn delete-single" data-path="${escapeAttr(cleanPath)}" title="Удалить">🗑️</button>
+                            </div>
+                        </li>
+                    `;
+                }).join('');
 
                 groupDiv.innerHTML = `
                     <div class="group-header">
-                        <h3>Группа #${group.group_id} <span class="badge">${group.count} файлов</span></h3>
-                        <label style="cursor:pointer; font-weight:500; user-select:none;">
-                            <input type="checkbox" class="group-select-all"> Выбрать все
-                        </label>
+                        <div class="group-header-left">
+                            <span class="group-toggle">▼</span>
+                            <span class="group-title">
+                                Группа #${group.group_id}
+                            </span>
+                            <span class="badge">${files.length} файл${getPlural(files.length)}</span>
+                            <span class="group-size">${formatBytes(groupTotalSize)}</span>
+                        </div>
+                        <div class="group-header-right">
+                            <label class="group-select-label">
+                                <input type="checkbox" class="group-select-all"> Выбрать все
+                            </label>
+                        </div>
                     </div>
                     <ul class="file-list">${filesHtml}</ul>
                 `;
+
                 groupsContainer.appendChild(groupDiv);
             });
+
+            emptyState.style.display = visibleCount === 0 && searchQuery ? 'block' : 'none';
             updateDeleteButton();
+            restoreThumbnailSources();
         }
 
-        // Делегирование событий чекбоксов
+        function restoreThumbnailSources() {
+            document.querySelectorAll('.thumbnail[data-filename]').forEach(img => {
+                const key = img.dataset.filename.toLowerCase();
+                if (imageCache.has(key)) {
+                    img.src = imageCache.get(key);
+                    img.dataset.loaded = 'true';
+                }
+            });
+        }
+
+        function highlightText(text, query) {
+            const escaped = escapeHtml(text);
+            if (!query) return escaped;
+            const regex = new RegExp(`(${escapeRegex(query)})`, 'gi');
+            return escaped.replace(regex, '<mark>$1</mark>');
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function escapeAttr(str) {
+            return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function escapeRegex(str) {
+            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function getPlural(n) {
+            const mod10 = n % 10;
+            const mod100 = n % 100;
+            if (mod10 === 1 && mod100 !== 11) return '';
+            if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'а';
+            return 'ов';
+        }
+
+        // ===== EVENT DELEGATION =====
         groupsContainer.addEventListener('change', e => {
             const target = e.target;
             if (target.classList.contains('group-select-all')) {
                 const group = target.closest('.group');
                 group.querySelectorAll('.file-checkbox').forEach(cb => {
                     cb.checked = target.checked;
-                    if (target.checked) selectedFiles.add(cb.value);
-                    else selectedFiles.delete(cb.value);
+                    const item = cb.closest('.file-item');
+                    if (target.checked) {
+                        selectedFiles.add(cb.value);
+                        item.classList.add('selected');
+                    } else {
+                        selectedFiles.delete(cb.value);
+                        item.classList.remove('selected');
+                    }
                 });
             } else if (target.classList.contains('file-checkbox')) {
-                if (target.checked) selectedFiles.add(target.value);
-                else selectedFiles.delete(target.value);
+                const item = target.closest('.file-item');
+                if (target.checked) {
+                    selectedFiles.add(target.value);
+                    item.classList.add('selected');
+                } else {
+                    selectedFiles.delete(target.value);
+                    item.classList.remove('selected');
+                }
 
                 const group = target.closest('.group');
                 const all = group.querySelectorAll('.file-checkbox');
@@ -226,33 +1432,163 @@
             updateDeleteButton();
         });
 
+        // Click handlers (delegation)
+        groupsContainer.addEventListener('click', e => {
+            // Group toggle
+            const header = e.target.closest('.group-header');
+            if (header && !e.target.closest('.group-select-label')) {
+                header.closest('.group').classList.toggle('collapsed');
+                return;
+            }
+
+            // Thumbnail click → lightbox
+            const thumb = e.target.closest('.thumbnail');
+            if (thumb && thumb.dataset.loaded === 'true') {
+                openLightbox(parseInt(thumb.dataset.index));
+                return;
+            }
+
+            // View button → lightbox
+            const viewBtn = e.target.closest('.view-btn');
+            if (viewBtn) {
+                openLightbox(parseInt(viewBtn.dataset.index));
+                return;
+            }
+
+            // Single delete
+            const delBtn = e.target.closest('.delete-single');
+            if (delBtn) {
+                handleSingleDelete(delBtn.dataset.path, delBtn.closest('.file-item'));
+                return;
+            }
+        });
+
+        // ===== SINGLE DELETE =====
+        async function handleSingleDelete(path, itemEl) {
+            const confirmed = await showConfirm(`Удалить файл?\n${path}`);
+            if (!confirmed) return;
+
+            itemEl.classList.add('deleting');
+            try {
+                const response = await fetch('/api/delete_duplicates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ files: [path] })
+                });
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                itemEl.remove();
+                selectedFiles.delete(path);
+                updateDeleteButton();
+                showToast('Файл удалён', 'success');
+                cleanupEmptyGroups();
+            } catch (err) {
+                itemEl.classList.remove('deleting');
+                showToast('Ошибка удаления: ' + err.message, 'error');
+            }
+        }
+
+        // ===== LIGHTBOX =====
+        function openLightbox(index) {
+            if (index < 0 || index >= allImages.length) return;
+            currentLightboxIndex = index;
+            updateLightbox();
+            lightboxModal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLightbox() {
+            lightboxModal.classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        function updateLightbox() {
+            const img = allImages[currentLightboxIndex];
+            if (!img) return;
+
+            const key = img.name.toLowerCase();
+            if (imageCache.has(key)) {
+                lightboxImage.src = imageCache.get(key);
+            } else {
+                lightboxImage.src = '';
+                lightboxImage.alt = 'Изображение не загружено';
+            }
+
+            lightboxInfo.textContent = `${img.name}  •  ${currentLightboxIndex + 1} / ${allImages.length}`;
+            $('lightboxPrev').style.display = currentLightboxIndex > 0 ? 'flex' : 'none';
+            $('lightboxNext').style.display = currentLightboxIndex < allImages.length - 1 ? 'flex' : 'none';
+        }
+
+        $('lightboxClose').addEventListener('click', closeLightbox);
+        lightboxModal.addEventListener('click', e => { if (e.target === lightboxModal) closeLightbox(); });
+        $('lightboxPrev').addEventListener('click', () => { currentLightboxIndex--; updateLightbox(); });
+        $('lightboxNext').addEventListener('click', () => { currentLightboxIndex++; updateLightbox(); });
+
+        // ===== SEARCH & SORT =====
+        let searchTimeout;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                searchQuery = searchInput.value.trim().toLowerCase();
+                if (fileData) renderGroups(fileData);
+            }, 250);
+        });
+
+        sortSelect.addEventListener('change', () => {
+            currentSort = sortSelect.value;
+            if (fileData) renderGroups(fileData);
+        });
+
+        // ===== EXPAND / COLLAPSE =====
+        $('expandAllBtn').addEventListener('click', () => {
+            document.querySelectorAll('.group.collapsed').forEach(g => g.classList.remove('collapsed'));
+        });
+
+        $('collapseAllBtn').addEventListener('click', () => {
+            document.querySelectorAll('.group:not(.collapsed)').forEach(g => g.classList.add('collapsed'));
+        });
+
+        // ===== EXPORT =====
+        $('exportBtn').addEventListener('click', () => {
+            if (!fileData) return;
+
+            const lines = [];
+            fileData.groups.forEach(g => {
+                lines.push(`=== Группа #${g.group_id} (${g.files?.length || 0} файлов) ===`);
+                g.files?.forEach(f => {
+                    lines.push(`  ${f.path}  [${formatBytes(f.size || 0)}]`);
+                });
+                lines.push('');
+            });
+
+            const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `duplicates_report_${new Date().toISOString().slice(0, 10)}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('Отчёт экспортирован', 'success');
+        });
+
+        // ===== DELETE BUTTON =====
         function updateDeleteButton() {
             const count = selectedFiles.size;
             deleteBtn.disabled = count === 0;
-            deleteBtn.textContent = count > 0
-                ? `🗑️ Удалить отмеченное (${count})`
-                : '🗑️ Удалить отмеченное';
+            selectedCountEl.textContent = count;
         }
 
-        function showStatus(msg, type) {
-            statusMsg.textContent = msg;
-            statusMsg.className = `status ${type}`;
-            statusMsg.style.display = 'block';
-            setTimeout(() => statusMsg.style.display = 'none', 6000);
-        }
-
-        // Очистка object URLs при закрытии страницы
-        window.addEventListener('beforeunload', () => {
-            imageCache.forEach(url => URL.revokeObjectURL(url));
-        });
-
-        // Обработка удаления
+        // ===== BULK DELETE =====
         deleteBtn.addEventListener('click', async () => {
             if (selectedFiles.size === 0) return;
-            if (!confirm(`Вы уверены, что хотите удалить ${selectedFiles.size} файл(ов)?\nЭто действие нельзя отменить.`)) return;
+
+            const confirmed = await showConfirm(
+                `Вы уверены, что хотите удалить ${selectedFiles.size} файл(ов)?\nЭто действие нельзя отменить.`
+            );
+            if (!confirmed) return;
 
             deleteBtn.disabled = true;
-            deleteBtn.textContent = '⏳ Удаление...';
+            deleteBtn.innerHTML = '⏳ Удаление...';
 
             try {
                 const response = await fetch('/api/delete_duplicates', {
@@ -263,40 +1599,103 @@
 
                 if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 const res = await response.json();
-                showStatus(`✅ Успешно удалено: ${res.deleted_count || selectedFiles.size} файлов`, 'success');
 
-                Array.from(selectedFiles).forEach(path => {
-                    const cb = groupsContainer.querySelector(`input.file-checkbox[value="${CSS.escape(path)}"]`);
-                    if (cb) {
-                        const img = cb.parentElement.querySelector('.thumbnail');
-                        if (img && img.src.startsWith('blob:')) {
-                            URL.revokeObjectURL(img.src);
-                        }
-                        cb.closest('li').remove();
+                // Remove deleted items
+                const deletedPaths = Array.from(selectedFiles);
+                deletedPaths.forEach(path => {
+                    const item = groupsContainer.querySelector(`.file-item[data-path="${CSS.escape(path)}"]`);
+                    if (item) {
+                        const img = item.querySelector('.thumbnail');
+                        if (img?.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+                        item.remove();
                     }
-                });
-
-                document.querySelectorAll('.group').forEach(g => {
-                    const remaining = g.querySelectorAll('.file-checkbox').length;
-                    const badge = g.querySelector('.badge');
-                    if (remaining === 0) {
-                        g.remove();
-                    } else if (badge) {
-                        badge.textContent = `${remaining} файлов`;
-                    }
-                    const all = g.querySelectorAll('.file-checkbox');
-                    const checked = g.querySelectorAll('.file-checkbox:checked');
-                    g.querySelector('.group-select-all').checked = all.length > 0 && all.length === checked.length;
                 });
 
                 selectedFiles.clear();
+                cleanupEmptyGroups();
                 updateDeleteButton();
+                updateStats(fileData);
+
+                showToast(`Удалено: ${res.deleted_count || deletedPaths.length} файлов`, 'success');
             } catch (err) {
-                showStatus('❌ Ошибка удаления: ' + err.message, 'error');
+                showToast('Ошибка удаления: ' + err.message, 'error');
             } finally {
                 deleteBtn.disabled = false;
                 updateDeleteButton();
             }
+        });
+
+        function cleanupEmptyGroups() {
+            document.querySelectorAll('.group').forEach(g => {
+                const remaining = g.querySelectorAll('.file-item').length;
+                const badge = g.querySelector('.badge');
+                if (remaining === 0) {
+                    g.style.transition = 'opacity 0.3s, transform 0.3s';
+                    g.style.opacity = '0';
+                    g.style.transform = 'scale(0.95)';
+                    setTimeout(() => g.remove(), 300);
+                } else if (badge) {
+                    badge.textContent = `${remaining} файл${getPlural(remaining)}`;
+                }
+            });
+        }
+
+        // ===== KEYBOARD SHORTCUTS =====
+        document.addEventListener('keydown', e => {
+            // Don't trigger when typing in inputs
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+                if (e.key === 'Escape') {
+                    e.target.blur();
+                    closeLightbox();
+                }
+                return;
+            }
+
+            if (e.key === 'Escape') {
+                closeLightbox();
+                if (confirmModal.classList.contains('active')) {
+                    confirmModal.classList.remove('active');
+                }
+                return;
+            }
+
+            if (lightboxModal.classList.contains('active')) {
+                if (e.key === 'ArrowLeft' && currentLightboxIndex > 0) {
+                    currentLightboxIndex--;
+                    updateLightbox();
+                } else if (e.key === 'ArrowRight' && currentLightboxIndex < allImages.length - 1) {
+                    currentLightboxIndex++;
+                    updateLightbox();
+                }
+                return;
+            }
+
+            if (e.key === '/' || (e.key === 'f' && (e.ctrlKey || e.metaKey))) {
+                e.preventDefault();
+                searchInput.focus();
+                return;
+            }
+
+            if (e.key === 'd' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                if (!deleteBtn.disabled) deleteBtn.click();
+            }
+        });
+
+        // ===== KEYBOARD HELP =====
+        $('keyboardHelp').addEventListener('click', () => {
+            showToast(`
+                <strong>Горячие клавиши:</strong><br>
+                <kbd>/</kbd> или <kbd>Ctrl+F</kbd> — Поиск<br>
+                <kbd>←</kbd> <kbd>→</kbd> — Навигация в просмотре<br>
+                <kbd>Esc</kbd> — Закрыть<br>
+                <kbd>Ctrl+D</kbd> — Удалить выбранное
+            `, 'info', 8000);
+        });
+
+        // ===== CLEANUP =====
+        window.addEventListener('beforeunload', () => {
+            imageCache.forEach(url => URL.revokeObjectURL(url));
         });
     </script>
 </body>
