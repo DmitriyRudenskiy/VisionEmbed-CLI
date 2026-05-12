@@ -5,237 +5,297 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Просмотр дубликатов по позе (DWPose)</title>
     <style>
-        :root {
-            --bg: #f4f6f9;
-            --card: #fff;
-            --text: #333;
-            --accent: #007bff;
-            --border: #e0e0e0;
-        }
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #121212;
-                --card: #1e1e1e;
-                --text: #e0e0e0;
-                --accent: #4da3ff;
-                --border: #333;
-            }
-        }
-        body {
-            font-family: system-ui, -apple-system, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            margin: 0;
-            padding: 20px;
-        }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
-        .meta { color: #888; font-size: 0.9rem; margin-bottom: 20px; }
-        .upload-box {
-            background: var(--card);
-            border: 2px dashed var(--border);
-            border-radius: 10px;
-            padding: 40px 20px;
-            text-align: center;
-            margin-bottom: 30px;
-            transition: border-color 0.3s;
-        }
-        .upload-box:hover {
-            border-color: var(--accent);
-        }
-        .upload-box input[type="file"] {
-            display: none;
-        }
-        .upload-box label {
-            cursor: pointer;
-            font-size: 1.1rem;
-            color: var(--accent);
-            text-decoration: underline;
-        }
-        .group {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 16px;
-            margin-bottom: 20px;
-        }
-        .group-header {
-            font-weight: 600;
-            margin-bottom: 12px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid var(--border);
-        }
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-            gap: 12px;
-        }
-        .card {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 8px;
-            text-align: center;
-        }
-        img {
-            max-width: 100%;
-            height: 180px;
-            object-fit: cover;
-            border-radius: 6px;
-            margin-bottom: 6px;
-            background: #ccc;
-        }
-        .info { font-size: 0.85rem; word-break: break-all; }
-        .size { color: var(--accent); font-weight: 500; }
-        button {
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            padding: 4px 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.8rem;
-            margin-top: 4px;
-        }
-        button:hover { opacity: 0.9; }
-        .error-msg { color: #dc3545; font-weight: bold; }
+        :root { --primary: #4a90e2; --danger: #e74c3c; --bg: #f5f7fa; --card: #ffffff; --text: #333; --border: #e0e0e0; }
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; background: var(--bg); color: var(--text); }
+        h1 { margin: 0 0 0.5rem; font-size: 1.5rem; }
+        .meta { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
+        .controls { position: sticky; top: 0; background: var(--bg); padding: 1rem 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--border); }
+        .upload-section { margin-bottom: 1.5rem; }
+        .upload-area { border: 2px dashed #aaa; padding: 2rem; text-align: center; border-radius: 8px; background: var(--card); cursor: pointer; transition: 0.2s; margin-bottom: 1rem; }
+        .upload-area:hover, .upload-area.dragover { border-color: var(--primary); background: #f0f7ff; }
+        .folder-upload { border: 2px dashed #27ae60; padding: 1rem; text-align: center; border-radius: 8px; background: var(--card); cursor: pointer; transition: 0.2s; }
+        .folder-upload:hover { border-color: #229954; background: #f0fff4; }
+        .group { background: var(--card); margin: 1rem 0; padding: 1rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .group-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+        .file-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem; }
+        .file-item { display: flex; align-items: flex-start; padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; transition: all 0.2s; gap: 1rem; }
+        .file-item:hover { background: #fafafa; border-color: var(--primary); }
+        .file-item input[type="checkbox"] { margin-top: 0.3rem; width: 18px; height: 18px; cursor: pointer; accent-color: var(--primary); flex-shrink: 0; }
+        .thumbnail { width: 100px; height: 100px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); background: #f5f5f5; flex-shrink: 0; }
+        .thumbnail.error { display: flex; align-items: center; justify-content: center; background: #f0f0f0; color: #999; font-size: 0.75rem; }
+        .file-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+        .file-name { font-weight: 500; word-break: break-all; font-size: 0.9rem; }
+        .file-path { color: #888; font-size: 0.8rem; word-break: break-all; }
+        .file-size { color: #666; font-size: 0.85rem; font-weight: 500; }
+        .btn { padding: 0.6rem 1.2rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.95rem; font-weight: 600; transition: 0.2s; display: inline-flex; align-items: center; gap: 0.5rem; }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-danger:hover:not(:disabled) { background: #c0392b; transform: translateY(-1px); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .badge { background: #eef2f7; padding: 0.25rem 0.6rem; border-radius: 12px; font-size: 0.85rem; font-weight: 500; }
+        .status { margin-top: 1rem; padding: 0.75rem; border-radius: 6px; display: none; font-weight: 500; }
+        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        #fileInfo { font-size: 0.95rem; color: #555; }
+        .loading { color: var(--primary); font-style: italic; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🔍 Отчёт о дубликатах по позе</h1>
-        <div class="meta">Загрузите JSON файл, сгенерированный скриптом find_duplicates.py</div>
+    <h1>🔍 Отчёт о дубликатах по позе</h1>
+    <div class="meta" id="metaInfo">Загрузите JSON файл для начала работы</div>
 
-        <div class="upload-box" id="dropZone">
-            <p>Перетащите <b>duplicates.json</b> сюда или</p>
-            <label for="jsonFile">Выберите файл</label>
-            <input type="file" id="jsonFile" accept=".json">
-        </div>
-
-        <div id="results"></div>
+    <div class="controls">
+        <div id="fileInfo">Ожидание файлов...</div>
+        <button id="deleteBtn" class="btn btn-danger" disabled>🗑️ Удалить отмеченное</button>
     </div>
 
+    <div class="upload-section">
+        <div id="jsonDropZone" class="upload-area">
+            <p>📄 Перетащите <code>duplicates.json</code> сюда или <a href="#" onclick="document.getElementById('jsonInput').click()">выберите файл</a></p>
+            <input type="file" id="jsonInput" accept=".json" style="display: none;">
+        </div>
+
+        <div id="folderDropZone" class="folder-upload" style="display: none;">
+            <p>📁 <strong>Для просмотра миниатюр:</strong> выберите папку с изображениями или перетащите её сюда</p>
+            <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
+        </div>
+    </div>
+
+    <div id="groupsContainer"></div>
+    <div id="statusMsg" class="status"></div>
+
     <script>
-        const PLACEHOLDER_IMG_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZTBlMGUwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiM4ODgiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjE0Ij5ObyBwcmV2aWV3PC90ZXh0Pjwvc3ZnPg==";
+        const jsonInput = document.getElementById('jsonInput');
+        const folderInput = document.getElementById('folderInput');
+        const jsonDropZone = document.getElementById('jsonDropZone');
+        const folderDropZone = document.getElementById('folderDropZone');
+        const groupsContainer = document.getElementById('groupsContainer');
+        const deleteBtn = document.getElementById('deleteBtn');
+        const statusMsg = document.getElementById('statusMsg');
+        const metaInfo = document.getElementById('metaInfo');
+        const fileInfo = document.getElementById('fileInfo');
 
-        function formatSize(sizeBytes) {
-            const units = ["B", "KB", "MB", "GB", "TB"];
-            let size = sizeBytes;
-            for (let i = 0; i < units.length; i++) {
-                if (size < 1024 || i === units.length - 1) {
-                    return size.toFixed(1) + ' ' + units[i];
-                }
-                size /= 1024;
-            }
-        }
+        let selectedFiles = new Set();
+        let fileData = null;
+        let imageCache = new Map(); // Кэш для object URLs
 
-        function copyPath(btn, path) {
-            if (navigator.clipboard) {
-                navigator.clipboard.writeText(path).then(() => {
-                    btn.textContent = '✅ Скопировано';
-                    setTimeout(() => btn.textContent = '📋 Путь', 1500);
-                });
-            } else {
-                prompt('Скопируйте путь вручную:', path);
-            }
-        }
+        // JSON Drag & Drop
+        jsonDropZone.addEventListener('dragover', e => { e.preventDefault(); jsonDropZone.classList.add('dragover'); });
+        jsonDropZone.addEventListener('dragleave', () => jsonDropZone.classList.remove('dragover'));
+        jsonDropZone.addEventListener('drop', e => {
+            e.preventDefault();
+            jsonDropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) handleJSONFile(e.dataTransfer.files[0]);
+        });
+        jsonInput.addEventListener('change', e => { if (e.target.files.length) handleJSONFile(e.target.files[0]); });
 
-        function renderGroups(data) {
-            const resultsDiv = document.getElementById('results');
-            resultsDiv.innerHTML = '';
+        // Folder Drag & Drop
+        folderDropZone.addEventListener('dragover', e => { e.preventDefault(); folderDropZone.classList.add('dragover'); });
+        folderDropZone.addEventListener('dragleave', () => folderDropZone.classList.remove('dragover'));
+        folderDropZone.addEventListener('drop', e => {
+            e.preventDefault();
+            folderDropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) handleFolderFiles(e.dataTransfer.files);
+        });
+        folderInput.addEventListener('change', e => { if (e.target.files.length) handleFolderFiles(e.target.files); });
 
-            if (!data || !data.groups || data.groups.length === 0) {
-                resultsDiv.innerHTML = '<p>Дубликаты не найдены или файл пуст.</p>';
+        function handleJSONFile(file) {
+            if (!file.name.endsWith('.json')) {
+                showStatus('❌ Поддерживаются только .json файлы', 'error');
                 return;
             }
-
-            const meta = document.createElement('div');
-            meta.className = 'meta';
-            meta.innerHTML = `Найдено групп: <b>${data.groups.length}</b> | Метод: нормализация торса + взвешенный RMSE`;
-            resultsDiv.appendChild(meta);
-
-            data.groups.forEach(group => {
-                const groupDiv = document.createElement('div');
-                groupDiv.className = 'group';
-
-                const headerDiv = document.createElement('div');
-                headerDiv.className = 'group-header';
-                headerDiv.textContent = `Группа #${group.group_id} (${group.files.length} файлов)`;
-                groupDiv.appendChild(headerDiv);
-
-                const gridDiv = document.createElement('div');
-                gridDiv.className = 'grid';
-
-                group.files.forEach(f => {
-                    const cardDiv = document.createElement('div');
-                    cardDiv.className = 'card';
-
-                    // Примечание: из-за политики безопасности браузера (CORS),
-                    // локальные картинки (file:///) могут не отображаться, если открыть HTML просто двойным кликом.
-                    // Для решения — запускать локальный сервер (например python -m http.server)
-                    // или просматривать картинки, скопировав путь.
-                    const fileUri = `file:///${f.path.replace(/\\/g, '/')}`;
-                    const safeName = f.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-                    cardDiv.innerHTML = `
-                        <img src="${fileUri}" alt="preview" onerror="this.onerror=null;this.src='data:image/svg+xml;base64,${PLACEHOLDER_IMG_B64}'">
-                        <div class="info">
-                            <span class="size">${formatSize(f.size)}</span><br>${safeName}
-                        </div>
-                        <button onclick="copyPath(this, \`${f.path.replace(/`/g, '\\`')}\`)">📋 Путь</button>
-                    `;
-                    gridDiv.appendChild(cardDiv);
-                });
-
-                groupDiv.appendChild(gridDiv);
-                resultsDiv.appendChild(groupDiv);
-            });
-        }
-
-        function processFile(file) {
-            if (!file || !file.name.endsWith('.json')) {
-                alert('Пожалуйста, выберите файл с расширением .json');
-                return;
-            }
-
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = e => {
                 try {
-                    const data = JSON.parse(e.target.result);
-                    renderGroups(data);
-                } catch (error) {
-                    document.getElementById('results').innerHTML = `<p class="error-msg">Ошибка парсинга JSON: ${error.message}</p>`;
+                    const rawData = JSON.parse(e.target.result);
+                    fileData = sanitizeKeys(rawData);
+                    renderGroups(fileData);
+                    jsonDropZone.style.display = 'none';
+                    folderDropZone.style.display = 'block';
+                    fileInfo.textContent = `Групп: ${fileData.total_groups}, Файлов: ${fileData.total_files}`;
+                    metaInfo.textContent = `Метод: Прямое сравнение DWPose без предварительного хэширования.`;
+                } catch (err) {
+                    showStatus('❌ Ошибка парсинга JSON: ' + err.message, 'error');
                 }
             };
             reader.readAsText(file);
         }
 
-        // Обработчик выбора файла через кнопку
-        document.getElementById('jsonFile').addEventListener('change', function(e) {
-            processFile(e.target.files[0]);
+        function handleFolderFiles(files) {
+            const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+            imageCache.clear();
+
+            // Создаём map: имя файла -> File object
+            imageFiles.forEach(file => {
+                const fileName = file.name.trim();
+                const objectURL = URL.createObjectURL(file);
+                imageCache.set(fileName, objectURL);
+            });
+
+            // Обновляем все миниатюры
+            document.querySelectorAll('.thumbnail').forEach(img => {
+                const fileName = img.dataset.filename;
+                if (imageCache.has(fileName)) {
+                    img.src = imageCache.get(fileName);
+                    img.classList.remove('error');
+                    img.textContent = '';
+                }
+            });
+
+            showStatus(`✅ Загружено ${imageFiles.length} изображений для превью`, 'success');
+        }
+
+        function sanitizeKeys(obj) {
+            if (Array.isArray(obj)) return obj.map(sanitizeKeys);
+            if (typeof obj === 'object' && obj !== null) {
+                return Object.fromEntries(
+                    Object.entries(obj).map(([k, v]) => [k.trim(), sanitizeKeys(v)])
+                );
+            }
+            return obj;
+        }
+
+        function renderGroups(data) {
+            groupsContainer.innerHTML = '';
+            selectedFiles.clear();
+
+            if (!data.groups || !Array.isArray(data.groups)) {
+                showStatus('❌ Неверная структура JSON: ожидался массив groups', 'error');
+                return;
+            }
+
+            data.groups.forEach(group => {
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'group';
+                groupDiv.dataset.groupId = group.group_id;
+
+                const filesHtml = group.files.map(file => {
+                    const cleanPath = file.path.trim();
+                    const cleanName = file.name.trim();
+                    const sizeKB = (file.size / 1024).toFixed(1);
+
+                    return `
+                    <li class="file-item">
+                        <input type="checkbox" class="file-checkbox" value="${cleanPath}" data-group="${group.group_id}">
+                        <div class="thumbnail-container">
+                            <img class="thumbnail"
+                                 data-filename="${cleanName}"
+                                 alt="${cleanName}"
+                                 onerror="this.classList.add('error'); this.textContent='Нет превью'">
+                        </div>
+                        <div class="file-info">
+                            <span class="file-name">${cleanName}</span>
+                            <span class="file-path">${cleanPath}</span>
+                            <span class="file-size">${sizeKB} KB</span>
+                        </div>
+                    </li>
+                `}).join('');
+
+                groupDiv.innerHTML = `
+                    <div class="group-header">
+                        <h3>Группа #${group.group_id} <span class="badge">${group.count} файлов</span></h3>
+                        <label style="cursor:pointer; font-weight:500; user-select:none;">
+                            <input type="checkbox" class="group-select-all"> Выбрать все
+                        </label>
+                    </div>
+                    <ul class="file-list">${filesHtml}</ul>
+                `;
+                groupsContainer.appendChild(groupDiv);
+            });
+            updateDeleteButton();
+        }
+
+        // Делегирование событий чекбоксов
+        groupsContainer.addEventListener('change', e => {
+            const target = e.target;
+            if (target.classList.contains('group-select-all')) {
+                const group = target.closest('.group');
+                group.querySelectorAll('.file-checkbox').forEach(cb => {
+                    cb.checked = target.checked;
+                    if (target.checked) selectedFiles.add(cb.value);
+                    else selectedFiles.delete(cb.value);
+                });
+            } else if (target.classList.contains('file-checkbox')) {
+                if (target.checked) selectedFiles.add(target.value);
+                else selectedFiles.delete(target.value);
+
+                const group = target.closest('.group');
+                const all = group.querySelectorAll('.file-checkbox');
+                const checked = group.querySelectorAll('.file-checkbox:checked');
+                group.querySelector('.group-select-all').checked = all.length > 0 && all.length === checked.length;
+            }
+            updateDeleteButton();
         });
 
-        // Обработчики Drag & Drop
-        const dropZone = document.getElementById('dropZone');
+        function updateDeleteButton() {
+            const count = selectedFiles.size;
+            deleteBtn.disabled = count === 0;
+            deleteBtn.textContent = count > 0
+                ? `🗑️ Удалить отмеченное (${count})`
+                : '🗑️ Удалить отмеченное';
+        }
 
-        dropZone.addEventListener('dragover', function(e) {
-            e.preventDefault();
-            dropZone.style.borderColor = 'var(--accent)';
-            dropZone.style.background = 'rgba(0, 123, 255, 0.05)';
+        function showStatus(msg, type) {
+            statusMsg.textContent = msg;
+            statusMsg.className = `status ${type}`;
+            statusMsg.style.display = 'block';
+            setTimeout(() => statusMsg.style.display = 'none', 6000);
+        }
+
+        // Очистка object URLs при закрытии страницы
+        window.addEventListener('beforeunload', () => {
+            imageCache.forEach(url => URL.revokeObjectURL(url));
         });
 
-        dropZone.addEventListener('dragleave', function(e) {
-            e.preventDefault();
-            dropZone.style.borderColor = 'var(--border)';
-            dropZone.style.background = '';
-        });
+        // Обработка удаления
+        deleteBtn.addEventListener('click', async () => {
+            if (selectedFiles.size === 0) return;
+            if (!confirm(`Вы уверены, что хотите удалить ${selectedFiles.size} файл(ов)?\nЭто действие нельзя отменить.`)) return;
 
-        dropZone.addEventListener('drop', function(e) {
-            e.preventDefault();
-            dropZone.style.borderColor = 'var(--border)';
-            dropZone.style.background = '';
-            if (e.dataTransfer.files.length) {
-                processFile(e.dataTransfer.files[0]);
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = '⏳ Удаление...';
+
+            try {
+                const response = await fetch('/api/delete_duplicates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ files: Array.from(selectedFiles) })
+                });
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                const res = await response.json();
+                showStatus(`✅ Успешно удалено: ${res.deleted_count || selectedFiles.size} файлов`, 'success');
+
+                Array.from(selectedFiles).forEach(path => {
+                    const cb = groupsContainer.querySelector(`input.file-checkbox[value="${CSS.escape(path)}"]`);
+                    if (cb) {
+                        const img = cb.parentElement.querySelector('.thumbnail');
+                        if (img && img.src.startsWith('blob:')) {
+                            URL.revokeObjectURL(img.src);
+                        }
+                        cb.closest('li').remove();
+                    }
+                });
+
+                document.querySelectorAll('.group').forEach(g => {
+                    const remaining = g.querySelectorAll('.file-checkbox').length;
+                    const badge = g.querySelector('.badge');
+                    if (remaining === 0) {
+                        g.remove();
+                    } else if (badge) {
+                        badge.textContent = `${remaining} файлов`;
+                    }
+                    const all = g.querySelectorAll('.file-checkbox');
+                    const checked = g.querySelectorAll('.file-checkbox:checked');
+                    g.querySelector('.group-select-all').checked = all.length > 0 && all.length === checked.length;
+                });
+
+                selectedFiles.clear();
+                updateDeleteButton();
+            } catch (err) {
+                showStatus('❌ Ошибка удаления: ' + err.message, 'error');
+            } finally {
+                deleteBtn.disabled = false;
+                updateDeleteButton();
             }
         });
     </script>
