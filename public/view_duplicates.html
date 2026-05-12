@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Просмотр дубликатов по позе (DWPose)</title>
+    <style>
+        :root {
+            --bg: #f4f6f9;
+            --card: #fff;
+            --text: #333;
+            --accent: #007bff;
+            --border: #e0e0e0;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #121212;
+                --card: #1e1e1e;
+                --text: #e0e0e0;
+                --accent: #4da3ff;
+                --border: #333;
+            }
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+        .meta { color: #888; font-size: 0.9rem; margin-bottom: 20px; }
+        .upload-box {
+            background: var(--card);
+            border: 2px dashed var(--border);
+            border-radius: 10px;
+            padding: 40px 20px;
+            text-align: center;
+            margin-bottom: 30px;
+            transition: border-color 0.3s;
+        }
+        .upload-box:hover {
+            border-color: var(--accent);
+        }
+        .upload-box input[type="file"] {
+            display: none;
+        }
+        .upload-box label {
+            cursor: pointer;
+            font-size: 1.1rem;
+            color: var(--accent);
+            text-decoration: underline;
+        }
+        .group {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .group-header {
+            font-weight: 600;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 12px;
+        }
+        .card {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px;
+            text-align: center;
+        }
+        img {
+            max-width: 100%;
+            height: 180px;
+            object-fit: cover;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            background: #ccc;
+        }
+        .info { font-size: 0.85rem; word-break: break-all; }
+        .size { color: var(--accent); font-weight: 500; }
+        button {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-top: 4px;
+        }
+        button:hover { opacity: 0.9; }
+        .error-msg { color: #dc3545; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Отчёт о дубликатах по позе</h1>
+        <div class="meta">Загрузите JSON файл, сгенерированный скриптом find_duplicates.py</div>
+
+        <div class="upload-box" id="dropZone">
+            <p>Перетащите <b>duplicates.json</b> сюда или</p>
+            <label for="jsonFile">Выберите файл</label>
+            <input type="file" id="jsonFile" accept=".json">
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const PLACEHOLDER_IMG_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZTBlMGUwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiM4ODgiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjE0Ij5ObyBwcmV2aWV3PC90ZXh0Pjwvc3ZnPg==";
+
+        function formatSize(sizeBytes) {
+            const units = ["B", "KB", "MB", "GB", "TB"];
+            let size = sizeBytes;
+            for (let i = 0; i < units.length; i++) {
+                if (size < 1024 || i === units.length - 1) {
+                    return size.toFixed(1) + ' ' + units[i];
+                }
+                size /= 1024;
+            }
+        }
+
+        function copyPath(btn, path) {
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(path).then(() => {
+                    btn.textContent = '✅ Скопировано';
+                    setTimeout(() => btn.textContent = '📋 Путь', 1500);
+                });
+            } else {
+                prompt('Скопируйте путь вручную:', path);
+            }
+        }
+
+        function renderGroups(data) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+
+            if (!data || !data.groups || data.groups.length === 0) {
+                resultsDiv.innerHTML = '<p>Дубликаты не найдены или файл пуст.</p>';
+                return;
+            }
+
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            meta.innerHTML = `Найдено групп: <b>${data.groups.length}</b> | Метод: нормализация торса + взвешенный RMSE`;
+            resultsDiv.appendChild(meta);
+
+            data.groups.forEach(group => {
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'group';
+
+                const headerDiv = document.createElement('div');
+                headerDiv.className = 'group-header';
+                headerDiv.textContent = `Группа #${group.group_id} (${group.files.length} файлов)`;
+                groupDiv.appendChild(headerDiv);
+
+                const gridDiv = document.createElement('div');
+                gridDiv.className = 'grid';
+
+                group.files.forEach(f => {
+                    const cardDiv = document.createElement('div');
+                    cardDiv.className = 'card';
+
+                    // Примечание: из-за политики безопасности браузера (CORS),
+                    // локальные картинки (file:///) могут не отображаться, если открыть HTML просто двойным кликом.
+                    // Для решения — запускать локальный сервер (например python -m http.server)
+                    // или просматривать картинки, скопировав путь.
+                    const fileUri = `file:///${f.path.replace(/\\/g, '/')}`;
+                    const safeName = f.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                    cardDiv.innerHTML = `
+                        <img src="${fileUri}" alt="preview" onerror="this.onerror=null;this.src='data:image/svg+xml;base64,${PLACEHOLDER_IMG_B64}'">
+                        <div class="info">
+                            <span class="size">${formatSize(f.size)}</span><br>${safeName}
+                        </div>
+                        <button onclick="copyPath(this, \`${f.path.replace(/`/g, '\\`')}\`)">📋 Путь</button>
+                    `;
+                    gridDiv.appendChild(cardDiv);
+                });
+
+                groupDiv.appendChild(gridDiv);
+                resultsDiv.appendChild(groupDiv);
+            });
+        }
+
+        function processFile(file) {
+            if (!file || !file.name.endsWith('.json')) {
+                alert('Пожалуйста, выберите файл с расширением .json');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    renderGroups(data);
+                } catch (error) {
+                    document.getElementById('results').innerHTML = `<p class="error-msg">Ошибка парсинга JSON: ${error.message}</p>`;
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // Обработчик выбора файла через кнопку
+        document.getElementById('jsonFile').addEventListener('change', function(e) {
+            processFile(e.target.files[0]);
+        });
+
+        // Обработчики Drag & Drop
+        const dropZone = document.getElementById('dropZone');
+
+        dropZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            dropZone.style.borderColor = 'var(--accent)';
+            dropZone.style.background = 'rgba(0, 123, 255, 0.05)';
+        });
+
+        dropZone.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            dropZone.style.borderColor = 'var(--border)';
+            dropZone.style.background = '';
+        });
+
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dropZone.style.borderColor = 'var(--border)';
+            dropZone.style.background = '';
+            if (e.dataTransfer.files.length) {
+                processFile(e.dataTransfer.files[0]);
+            }
+        });
+    </script>
+</body>
+</html>
