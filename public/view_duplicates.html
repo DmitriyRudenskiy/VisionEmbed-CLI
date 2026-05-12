@@ -43,14 +43,12 @@
             padding: 2rem;
         }
 
-        /* Header */
         .header { margin-bottom: 1.5rem; }
         .header h1 {
             font-size: 1.5rem; font-weight: 600;
             letter-spacing: -0.02em; margin-bottom: 1.5rem;
         }
 
-        /* Stats */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -77,16 +75,20 @@
         .stat-value.accent { color: var(--accent); }
         .stat-value.danger { color: var(--danger); }
 
-        /* Controls */
+        /* Controls – прилипает к низу экрана */
         .controls-bar {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius);
             padding: 0.75rem 1rem;
-            display: none; flex-wrap: wrap; gap: 0.75rem;
+            display: none;
+            flex-wrap: wrap; gap: 0.75rem;
             align-items: center;
             margin-bottom: 1.5rem;
             box-shadow: var(--shadow-sm);
+            position: sticky;
+            bottom: 0;
+            z-index: 50;
         }
         .controls-bar.visible { display: flex; }
 
@@ -131,6 +133,25 @@
             border-color: var(--danger-border);
         }
         .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.8rem; }
+
+        /* Bash output textarea */
+        .bash-output-container {
+            display: none;
+            margin-bottom: 1.5rem;
+        }
+        .bash-output-container.visible { display: block; }
+        #bashOutput {
+            width: 100%;
+            font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+            font-size: 0.85rem;
+            padding: 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            resize: vertical;
+            min-height: 6rem;
+        }
 
         /* Upload zone */
         .upload-zone {
@@ -224,6 +245,11 @@
             border-color: var(--border-hover);
             box-shadow: var(--shadow-md);
             transform: translateY(-2px);
+        }
+        /* Самый крупный файл в группе */
+        .file-card.first {
+            background: var(--success-bg);
+            border-color: var(--success);
         }
         .file-card.selected {
             background: var(--accent-bg);
@@ -375,12 +401,18 @@
             </div>
         </header>
 
+        <!-- Липкая панель управления -->
         <div class="controls-bar" id="controlsBar">
             <input type="text" class="search-input" id="searchInput" placeholder="Поиск по имени файла…">
             <button class="btn btn-sm" onclick="selectAllDuplicates()">Выбрать все дубли</button>
-            <button class="btn btn-danger" id="deleteBtn" disabled onclick="deleteSelected()">
-                Удалить (<span id="selectedCount">0</span>)
+            <button class="btn btn-danger" id="deleteBtn" disabled onclick="generateBashCommands()">
+                Удалить отмеченное (<span id="selectedCount">0</span>)
             </button>
+        </div>
+
+        <!-- Блок для сгенерированного Bash-скрипта -->
+        <div id="bashOutputContainer" class="bash-output-container">
+            <textarea id="bashOutput" readonly rows="8" placeholder="#!/bin/bash …"></textarea>
         </div>
 
         <div id="uploadZone" class="upload-zone">
@@ -491,16 +523,12 @@
             Array.from(files).forEach(file => {
                 if (file.type.startsWith('image/')) {
                     const url = URL.createObjectURL(file);
-                    // Cache by filename only
                     imageCache.set(file.path.toLowerCase(), url);
                     count++;
                 }
             });
 
-
-
             document.querySelectorAll('.card-image').forEach(img => {
-                // Match by short filename to find preview
                 const fname = img.dataset.filename.toLowerCase();
                 if (imageCache.has(fname)) {
                     img.src = imageCache.get(fname);
@@ -533,6 +561,8 @@
             container.innerHTML = '';
             selectedFiles.clear();
             updateDeleteBtn();
+            // Скрываем предыдущий вывод скрипта
+            $('bashOutputContainer').classList.remove('visible');
 
             (rawData.groups || []).forEach(group => {
                 const groupEl = document.createElement('div');
@@ -554,11 +584,19 @@
                 const grid = document.createElement('div');
                 grid.className = 'files-grid';
 
-                group.files.forEach(file => {
+                // Сортировка файлов группы по убыванию размера
+                const sortedFiles = [...group.files].sort((a, b) => b.size - a.size);
+
+                sortedFiles.forEach((file, index) => {
                     const card = document.createElement('div');
                     card.className = 'file-card';
                     card.dataset.path = file.path;
                     card.dataset.group = group.group_id;
+
+                    // Класс first для самого крупного файла в группе
+                    if (index === 0) {
+                        card.classList.add('first');
+                    }
 
                     const safePath = escapeHtml(file.path);
                     const safeName = escapeHtml(file.name);
@@ -569,7 +607,8 @@
 
                     card.innerHTML = `
                         <div class="card-image-wrapper" onclick="openLightbox('${jsSafeName}')">
-                            <input type="checkbox" class="card-checkbox"
+                            <input type="checkbox" class="del-checkbox card-checkbox"
+                                   value="${safePath}"
                                    onclick="event.stopPropagation()"
                                    onchange="toggleSelect(this, '${jsSafePath}')">
                             <img class="card-image" src="${safePath}" data-filename="${safeName}" alt="">
@@ -663,27 +702,35 @@
             $('deleteBtn').disabled = selectedFiles.size === 0;
         }
 
-        function deleteSelected() {
-            if (!confirm(`Удалить ${selectedFiles.size} файлов?`)) return;
-            selectedFiles.forEach(path => {
-                const card = document.querySelector(`.file-card[data-path="${CSS.escape(path)}"]`);
-                if (card) {
-                    card.style.transition = 'all 0.3s ease';
-                    card.style.opacity = '0';
-                    card.style.transform = 'scale(0.9)';
-                    setTimeout(() => card.remove(), 300);
-                }
+        // ── Bash script generation ──
+        function generateBashCommands() {
+            const checkboxes = document.querySelectorAll('.del-checkbox:checked');
+            if (checkboxes.length === 0) {
+                alert('Не выбрано ни одного файла для удаления.');
+                return;
+            }
+
+            // Собираем пути из value отмеченных чекбоксов
+            const paths = Array.from(checkboxes).map(cb => cb.value);
+
+            let script = '#!/bin/bash\n';
+            paths.forEach(p => {
+                // Экранирование одинарных кавычек для безопасной вставки в '…'
+                const escaped = bashEscape(p);
+                script += `rm ${escaped}\n`;
             });
 
-            setTimeout(() => {
-                document.querySelectorAll('.group-block').forEach(block => {
-                    if (!block.querySelector('.file-card')) block.remove();
-                });
-            }, 350);
+            const container = $('bashOutputContainer');
+            const textarea = $('bashOutput');
+            textarea.value = script;
+            container.classList.add('visible');
+            textarea.select();
+            showToast('Bash-скрипт сгенерирован. Скопируйте и выполните в терминале.', 'success');
+        }
 
-            selectedFiles.clear();
-            updateDeleteBtn();
-            showToast('Файлы помечены на удаление (демо)', 'success');
+        // Экранирование пути для одиночных кавычек Bash: замена ' на '\''
+        function bashEscape(path) {
+            return `'${path.replace(/'/g, "'\\''")}'`;
         }
 
         // ── Search ──
