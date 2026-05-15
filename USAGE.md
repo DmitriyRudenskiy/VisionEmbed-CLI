@@ -75,3 +75,7 @@ llama-server \
 - **API:** отправляйте запросы на эндпоинт `/v1/chat/completions` в формате, совместимом с OpenAI API
 
 > 💡 **Совет:** Для моделей, разбитых на несколько GGUF-файлов (шардов), укажите только первый файл (например, `...-00001-of-00003.gguf`). llama.cpp автоматически подгрузит все остальные части.
+> 
+> 
+> 
+python3 /Users/user/PycharmProjects/VisionEmbed-CLI/style_dataset_selector.py --input-dir . --target-size 19 --output-json my_result.json
