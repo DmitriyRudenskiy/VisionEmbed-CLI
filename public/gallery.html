@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Curated Selection</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #F8F7F4;
+            --bg-warm: #F3F1EC;
+            --fg: #1A1A18;
+            --fg-light: #3D3B36;
+            --muted: #9A9590;
+            --accent: #B8705A;
+            --accent-light: #D4A892;
+            --card: #FFFFFF;
+            --border: #E8E5E0;
+            --border-light: #F0EDE8;
+            --cluster-0: #C9B99A;
+            --cluster-1: #C9929A;
+            --cluster-2: #92AEC9;
+            --cluster-3: #A392C9;
+            --cluster-4: #92C9A8;
+            --radius: 6px;
+            --radius-lg: 12px;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
+            --shadow-md: 0 4px 20px rgba(0,0,0,0.06);
+            --shadow-lg: 0 8px 40px rgba(0,0,0,0.08);
+            --transition: 0.35s cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: -1;
+            opacity: 0.35;
+            background-image:
+                radial-gradient(circle at 20% 30%, rgba(184,112,90,0.04) 0%, transparent 50%),
+                radial-gradient(circle at 80% 70%, rgba(146,174,201,0.04) 0%, transparent 50%);
+        }
+
+        /* === UPLOAD === */
+        .upload-screen {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            transition: opacity 0.6s ease, transform 0.6s ease;
+        }
+        .upload-screen.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(1.02);
+        }
+        .upload-container {
+            text-align: center;
+            max-width: 520px;
+            padding: 0 24px;
+        }
+        .upload-logo {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 42px;
+            font-weight: 300;
+            letter-spacing: 0.08em;
+            color: var(--fg);
+            margin-bottom: 8px;
+        }
+        .upload-subtitle {
+            font-size: 13px;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 48px;
+        }
+        .drop-zone {
+            position: relative;
+            border: 1.5px dashed var(--border);
+            border-radius: var(--radius-lg);
+            padding: 56px 40px;
+            cursor: pointer;
+            transition: var(--transition);
+            background: transparent;
+        }
+        .drop-zone:hover, .drop-zone.drag-over {
+            border-color: var(--accent);
+            background: rgba(184,112,90,0.03);
+        }
+        .drop-zone.drag-over { transform: scale(1.01); }
+        .drop-zone-icon {
+            font-size: 28px;
+            color: var(--muted);
+            margin-bottom: 16px;
+            transition: var(--transition);
+        }
+        .drop-zone:hover .drop-zone-icon { color: var(--accent); }
+        .drop-zone-text { font-size: 15px; color: var(--fg-light); margin-bottom: 6px; }
+        .drop-zone-hint { font-size: 12px; color: var(--muted); }
+        .drop-zone input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .upload-note {
+            margin-top: 24px;
+            font-size: 11px;
+            color: var(--muted);
+            line-height: 1.7;
+            max-width: 400px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .upload-note i { margin-right: 4px; }
+
+        /* === GALLERY === */
+        .gallery-screen {
+            opacity: 0;
+            transition: opacity 0.6s ease 0.3s;
+            min-height: 100vh;
+            display: none;
+        }
+        .gallery-screen.visible { opacity: 1; }
+
+        .gallery-header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(248,247,244,0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border-light);
+            padding: 0 40px;
+        }
+        .header-inner {
+            max-width: 1440px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+        }
+        .header-brand {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 22px;
+            font-weight: 400;
+            letter-spacing: 0.06em;
+        }
+        .header-actions { display: flex; align-items: center; gap: 16px; }
+        .header-stat { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+        .header-stat strong { color: var(--fg-light); font-weight: 500; }
+        .btn-reload {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 16px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: transparent;
+            font-family: 'DM Sans', sans-serif;
+            font-size: 12px;
+            color: var(--muted);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .btn-reload:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* === Fallback bar === */
+        .fallback-bar {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 16px 40px 0;
+            display: none;
+        }
+        .fallback-bar.visible { display: block; }
+        .fallback-bar-inner {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            background: rgba(184,112,90,0.06);
+            border: 1px solid rgba(184,112,90,0.15);
+            font-size: 13px;
+            color: var(--fg-light);
+            flex-wrap: wrap;
+        }
+        .fallback-bar-inner i { color: var(--accent); font-size: 15px; }
+        .fallback-bar-text { flex: 1; min-width: 200px; line-height: 1.5; }
+        .fallback-bar-text strong { color: var(--fg); }
+        .fallback-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 18px;
+            border: 1px solid var(--accent);
+            border-radius: var(--radius);
+            background: var(--accent);
+            color: #fff;
+            font-family: 'DM Sans', sans-serif;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition);
+            white-space: nowrap;
+            position: relative;
+            overflow: hidden;
+        }
+        .fallback-btn:hover { background: #a5614c; border-color: #a5614c; }
+        .fallback-btn input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .gallery-toolbar {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 28px 40px 0;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+        .toolbar-left { display: flex; flex-direction: column; gap: 16px; }
+        .toolbar-title {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 32px;
+            font-weight: 300;
+            line-height: 1.1;
+        }
+        .toolbar-meta { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .meta-item { font-size: 12px; color: var(--muted); letter-spacing: 0.03em; }
+        .meta-item span { color: var(--fg-light); font-weight: 500; }
+        .meta-divider { width: 3px; height: 3px; border-radius: 50%; background: var(--border); }
+
+        .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .filter-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 14px;
+            border: 1px solid var(--border);
+            border-radius: 100px;
+            background: transparent;
+            font-family: 'DM Sans', sans-serif;
+            font-size: 12px;
+            color: var(--muted);
+            cursor: pointer;
+            transition: var(--transition);
+            white-space: nowrap;
+        }
+        .filter-btn:hover { border-color: var(--fg-light); color: var(--fg-light); }
+        .filter-btn.active { border-color: var(--fg); background: var(--fg); color: var(--bg); }
+        .filter-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+        .sort-select {
+            padding: 7px 30px 7px 14px;
+            border: 1px solid var(--border);
+            border-radius: 100px;
+            background: transparent;
+            font-family: 'DM Sans', sans-serif;
+            font-size: 12px;
+            color: var(--muted);
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239A9590' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            transition: var(--transition);
+        }
+        .sort-select:hover { border-color: var(--fg-light); color: var(--fg-light); }
+        .sort-select:focus { outline: none; border-color: var(--accent); }
+
+        .gallery-grid {
+            max-width: 1440px;
+            margin: 28px auto 60px;
+            padding: 0 40px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 16px;
+        }
+        .gallery-item {
+            position: relative;
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            background: var(--card);
+            box-shadow: var(--shadow-sm);
+            cursor: pointer;
+            transition: var(--transition);
+            animation: itemIn 0.5s ease backwards;
+        }
+        @keyframes itemIn {
+            from { opacity: 0; transform: translateY(16px); }
+        }
+        .gallery-item:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+        .gallery-item-img {
+            width: 100%;
+            aspect-ratio: 3/4;
+            object-fit: cover;
+            display: block;
+            transition: transform 0.6s cubic-bezier(0.25,0.1,0.25,1);
+        }
+        .gallery-item:hover .gallery-item-img { transform: scale(1.03); }
+        .gallery-item-overlay {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(to top, rgba(26,26,24,0.6) 0%, transparent 50%);
+            opacity: 0;
+            transition: opacity var(--transition);
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            padding: 20px;
+        }
+        .gallery-item:hover .gallery-item-overlay { opacity: 1; }
+        .overlay-similarity {
+            font-size: 11px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.7);
+            margin-bottom: 4px;
+        }
+        .overlay-value {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 24px;
+            font-weight: 300;
+            color: #fff;
+        }
+        .gallery-item-badge {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 100px;
+            background: rgba(255,255,255,0.85);
+            backdrop-filter: blur(8px);
+            font-size: 10px;
+            font-weight: 500;
+            color: var(--fg-light);
+            letter-spacing: 0.04em;
+        }
+        .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+        .img-placeholder {
+            width: 100%;
+            aspect-ratio: 3/4;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-warm);
+            color: var(--muted);
+            font-size: 11px;
+            word-break: break-all;
+            padding: 16px;
+            text-align: center;
+            line-height: 1.5;
+        }
+        .img-placeholder i { font-size: 24px; margin-bottom: 8px; display: block; }
+
+        /* === MODAL === */
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 500;
+            background: rgba(26,26,24,0.7);
+            backdrop-filter: blur(8px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.35s ease;
+        }
+        .modal-backdrop.open { opacity: 1; pointer-events: all; }
+
+        .modal {
+            position: fixed;
+            z-index: 510;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%,-50%) scale(0.96);
+            width: 90vw;
+            max-width: 960px;
+            max-height: 88vh;
+            background: var(--card);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.35s ease, transform 0.35s ease;
+            display: flex;
+            box-shadow: var(--shadow-lg);
+        }
+        .modal.open { opacity: 1; pointer-events: all; transform: translate(-50%,-50%) scale(1); }
+
+        .modal-image-side {
+            flex: 0 0 52%;
+            background: var(--bg-warm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+        .modal-image-side img { width: 100%; height: 100%; object-fit: cover; }
+        .modal-image-side .img-placeholder { aspect-ratio: unset; height: 100%; }
+
+        .modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255,255,255,0.85);
+            backdrop-filter: blur(8px);
+            color: var(--fg);
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+            z-index: 2;
+        }
+        .modal-close:hover { background: #fff; transform: rotate(90deg); }
+
+        .nav-hint {
+            position: absolute;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: rgba(255,255,255,0.45);
+            letter-spacing: 0.05em;
+            pointer-events: none;
+        }
+
+        .modal-details {
+            flex: 1;
+            padding: 36px 32px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-details::-webkit-scrollbar { width: 4px; }
+        .modal-details::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+        .modal-detail-label {
+            font-size: 10px;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+        .modal-detail-value {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 22px;
+            font-weight: 400;
+            color: var(--fg);
+            margin-bottom: 24px;
+        }
+        .modal-detail-value.mono {
+            font-family: 'DM Sans', sans-serif;
+            font-size: 13px;
+            font-weight: 400;
+            color: var(--fg-light);
+            word-break: break-all;
+            line-height: 1.6;
+        }
+        .similarity-bar-wrapper { margin-bottom: 28px; }
+        .similarity-bar-bg {
+            width: 100%;
+            height: 4px;
+            border-radius: 2px;
+            background: var(--border-light);
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .similarity-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            background: var(--accent);
+            transition: width 0.6s ease;
+        }
+        .cluster-badge-lg {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 100px;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 28px;
+            width: fit-content;
+        }
+        .cluster-badge-lg .badge-dot { width: 8px; height: 8px; }
+        .similar-section-title {
+            font-size: 10px;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 14px;
+            margin-top: 8px;
+        }
+        .similar-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+        .similar-item {
+            position: relative;
+            border-radius: var(--radius);
+            overflow: hidden;
+            cursor: pointer;
+            aspect-ratio: 3/4;
+            background: var(--bg-warm);
+            transition: var(--transition);
+        }
+        .similar-item:hover { transform: scale(1.04); }
+        .similar-item img { width: 100%; height: 100%; object-fit: cover; }
+        .similar-item .img-placeholder { aspect-ratio: unset; height: 100%; font-size: 9px; }
+        .similar-item .img-placeholder i { font-size: 14px; }
+        .similar-item-distance {
+            position: absolute;
+            bottom: 6px;
+            left: 6px;
+            padding: 2px 8px;
+            border-radius: 100px;
+            background: rgba(255,255,255,0.85);
+            backdrop-filter: blur(6px);
+            font-size: 10px;
+            color: var(--fg-light);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--muted);
+            grid-column: 1 / -1;
+        }
+        .empty-state i { font-size: 36px; margin-bottom: 12px; display: block; }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(20px);
+            padding: 12px 24px;
+            border-radius: var(--radius);
+            background: var(--fg);
+            color: var(--bg);
+            font-size: 13px;
+            opacity: 0;
+            transition: all 0.35s ease;
+            z-index: 999;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        @media (max-width: 768px) {
+            .gallery-header { padding: 0 20px; }
+            .gallery-toolbar { padding: 20px 20px 0; }
+            .gallery-grid { padding: 0 20px; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 10px; }
+            .toolbar-title { font-size: 24px; }
+            .fallback-bar { padding: 16px 20px 0; }
+            .modal { flex-direction: column; width: 95vw; max-height: 92vh; }
+            .modal-image-side { flex: 0 0 50vw; max-height: 40vh; }
+            .modal-details { padding: 24px 20px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Экран загрузки -->
+    <div class="upload-screen" id="uploadScreen">
+        <div class="upload-container">
+            <div class="upload-logo">Curated</div>
+            <div class="upload-subtitle">Visual Selection Gallery</div>
+
+            <div class="drop-zone" id="dropZone">
+                <div class="drop-zone-icon"><i class="fa-regular fa-file-code"></i></div>
+                <div class="drop-zone-text">Перетащите JSON файл сюда</div>
+                <div class="drop-zone-hint">или нажмите для выбора файла</div>
+                <input type="file" accept=".json,application/json" id="jsonInput">
+            </div>
+
+            <div class="upload-note">
+                <i class="fa-solid fa-circle-info"></i>
+                Изображения загружаются по путям из JSON.
+                Firefox открывает их автоматически. Chrome потребует
+                дополнительный выбор папки — подсказка появится при необходимости.
+            </div>
+        </div>
+    </div>
+
+    <!-- Экран галереи -->
+    <div class="gallery-screen" id="galleryScreen">
+        <header class="gallery-header">
+            <div class="header-inner">
+                <div class="header-brand">Curated</div>
+                <div class="header-actions">
+                    <div class="header-stat" id="headerStats"></div>
+                    <button class="btn-reload" id="btnReload">
+                        <i class="fa-solid fa-arrow-rotate-left" style="font-size:11px"></i>
+                        Новый файл
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <div class="gallery-toolbar">
+            <div class="toolbar-left">
+                <div class="toolbar-meta" id="toolbarMeta"></div>
+            </div>
+            <div class="filters" id="filtersContainer"></div>
+        </div>
+
+        <div class="gallery-grid" id="galleryGrid"></div>
+    </div>
+
+    <!-- Модальное окно -->
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal" id="modal">
+        <div class="modal-image-side" id="modalImageSide">
+            <button class="modal-close" id="modalClose" aria-label="Закрыть">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="modal-details" id="modalDetails"></div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        /* === Состояние === */
+        let appData = null;
+        let imageMap = {};   /* имя файла → blob URL (для fallback) */
+        let activeFilter = 'all';
+        let currentSort = 'default';
+        let imagesFailed = false;
+
+        const clusterColors = {
+            0: { bg: 'rgba(201,185,154,0.15)', dot: '#C9B99A', text: '#8A7D62' },
+            1: { bg: 'rgba(201,146,154,0.15)', dot: '#C9929A', text: '#9A6269' },
+            2: { bg: 'rgba(146,174,201,0.15)', dot: '#92AEC9', text: '#5E7A94' },
+            3: { bg: 'rgba(163,146,201,0.15)', dot: '#A392C9', text: '#70629A' },
+            4: { bg: 'rgba(146,201,168,0.15)', dot: '#92C9A8', text: '#5E9A76' },
+        };
+        function getClusterColor(id) {
+            return clusterColors[id] || clusterColors[id % 5];
+        }
+
+        /* === Утилиты === */
+        function showToast(message) {
+            const t = document.getElementById('toast');
+            t.textContent = message;
+            t.classList.add('show');
+            setTimeout(function() { t.classList.remove('show'); }, 2800);
+        }
+
+        function extractFilename(path) {
+            /* Разбиваем по / и берём последний компонент */
+            var parts = path.replace(/\\/g, '/').split('/');
+            return parts[parts.length - 1];
+        }
+
+        /* Прямой file:// URL из абсолютного пути */
+        function pathToFileURL(path) {
+            var cleaned = path.replace(/\\/g, '/');
+            if (cleaned.startsWith('/')) {
+                return 'file://' + cleaned;
+            }
+            return 'file:///' + cleaned;
+        }
+
+        /* Получить URL для изображения: blob из imageMap или file:// */
+        function getImageUrl(path) {
+            var name = extractFilename(path);
+            if (imageMap[name]) return imageMap[name];
+            return pathToFileURL(path);
+        }
+
+        /* === Загрузка JSON === */
+        var dropZone = document.getElementById('dropZone');
+        var jsonInput = document.getElementById('jsonInput');
+
+        dropZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+        dropZone.addEventListener('dragleave', function() {
+            dropZone.classList.remove('drag-over');
+        });
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            var file = e.dataTransfer.files[0];
+            if (file && (file.type === 'application/json' || file.name.endsWith('.json'))) {
+                readJsonFile(file);
+            } else {
+                showToast('Пожалуйста, загрузите JSON файл');
+            }
+        });
+
+        jsonInput.addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (file) readJsonFile(file);
+        });
+
+        function readJsonFile(file) {
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    var data = JSON.parse(e.target.result);
+                    if (!data.selection || !Array.isArray(data.selection)) {
+                        showToast('Неверный формат JSON: отсутствует selection');
+                        return;
+                    }
+                    appData = data;
+                    imagesFailed = false;
+                    showGallery();
+                } catch (err) {
+                    showToast('Ошибка парсинга JSON: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        /* === Fallback: загрузка папки для Chrome === */
+        document.getElementById('fallbackFolderInput').addEventListener('change', function(e) {
+            var files = Array.from(e.target.files);
+            var imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'];
+            var count = 0;
+            files.forEach(function(f) {
+                var ext = '.' + f.name.split('.').pop().toLowerCase();
+                if (imageExts.indexOf(ext) !== -1) {
+                    var url = URL.createObjectURL(f);
+                    imageMap[f.name] = url;
+                    count++;
+                }
+            });
+            if (count > 0) {
+                showToast('Загружено изображений: ' + count);
+                imagesFailed = false;
+                document.getElementById('fallbackBar').classList.remove('visible');
+                renderGrid();
+            }
+        });
+
+        /* === Проверка загрузки изображений === */
+        function checkImagesLoaded() {
+            /* Даём небольшую паузу, чтобы браузер успел попробовать загрузить file:// */
+            setTimeout(function() {
+                var imgs = document.querySelectorAll('.gallery-item-img');
+                var failedCount = 0;
+                imgs.forEach(function(img) {
+                    if (!img.complete || img.naturalWidth === 0) {
+                        failedCount++;
+                    }
+                });
+                /* Если хоть одно не загрузилось — показываем fallback-бар */
+                if (failedCount > 0 && Object.keys(imageMap).length === 0) {
+                    imagesFailed = true;
+                    document.getElementById('fallbackBar').classList.add('visible');
+                }
+            }, 1500);
+        }
+
+        /* === Переключение экранов === */
+        function showGallery() {
+            document.getElementById('uploadScreen').classList.add('hidden');
+            var gs = document.getElementById('galleryScreen');
+            gs.style.display = 'block';
+            requestAnimationFrame(function() {
+                gs.classList.add('visible');
+            });
+            renderGallery();
+            checkImagesLoaded();
+        }
+
+        document.getElementById('btnReload').addEventListener('click', function() {
+            appData = null;
+            activeFilter = 'all';
+            currentSort = 'default';
+            imagesFailed = false;
+            Object.values(imageMap).forEach(function(u) { URL.revokeObjectURL(u); });
+            imageMap = {};
+            document.getElementById('fallbackBar').classList.remove('visible');
+            document.getElementById('galleryScreen').classList.remove('visible');
+            setTimeout(function() {
+                document.getElementById('galleryScreen').style.display = 'none';
+                document.getElementById('uploadScreen').classList.remove('hidden');
+                jsonInput.value = '';
+                document.getElementById('fallbackFolderInput').value = '';
+            }, 400);
+        });
+
+        /* === Рендер галереи === */
+        function renderGallery() {
+            if (!appData) return;
+
+            var sel = appData.selection;
+            var meta = appData.metadata;
+
+            document.getElementById('headerStats').innerHTML =
+                '<strong>' + sel.length + '</strong> изображений';
+
+            var uniqueClusters = [];
+            sel.forEach(function(s) {
+                if (uniqueClusters.indexOf(s.cluster_id) === -1) {
+                    uniqueClusters.push(s.cluster_id);
+                }
+            });
+            uniqueClusters.sort();
+
+            document.getElementById('toolbarMeta').innerHTML =
+                '<div class="meta-item"><span>' + meta.total_selected + '</span> выбрано</div>' +
+                '<div class="meta-divider"></div>' +
+                '<div class="meta-item">Средняя схожесть <span>' + (meta.avg_similarity * 100).toFixed(1) + '%</span></div>' +
+                '<div class="meta-divider"></div>' +
+                '<div class="meta-item"><span>' + uniqueClusters.length + '</span> кластеров</div>';
+
+            renderFilters(uniqueClusters);
+            renderGrid();
+        }
+
+        function renderFilters(clusters) {
+            var cont = document.getElementById('filtersContainer');
+            var html = '<button class="filter-btn ' + (activeFilter === 'all' ? 'active' : '') + '" data-filter="all">Все</button>';
+
+            clusters.forEach(function(c) {
+                var color = getClusterColor(c);
+                var count = appData.selection.filter(function(s) { return s.cluster_id === c; }).length;
+                html += '<button class="filter-btn ' + (activeFilter === c ? 'active' : '') + '" data-filter="' + c + '">' +
+                    '<span class="filter-dot" style="background:' + color.dot + '"></span>' +
+                    'Кластер ' + c + ' <span style="opacity:0.5;margin-left:2px">' + count + '</span></button>';
+            });
+
+            html += '<select class="sort-select" id="sortSelect">' +
+                '<option value="default"' + (currentSort === 'default' ? ' selected' : '') + '>По порядку</option>' +
+                '<option value="sim-desc"' + (currentSort === 'sim-desc' ? ' selected' : '') + '>Схожесть ↓</option>' +
+                '<option value="sim-asc"' + (currentSort === 'sim-asc' ? ' selected' : '') + '>Схожесть ↑</option>' +
+                '<option value="cluster"' + (currentSort === 'cluster' ? ' selected' : '') + '>По кластеру</option></select>';
+
+            cont.innerHTML = html;
+
+            cont.querySelectorAll('.filter-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    activeFilter = btn.dataset.filter === 'all' ? 'all' : parseInt(btn.dataset.filter);
+                    renderFilters(clusters);
+                    renderGrid();
+                });
+            });
+
+            document.getElementById('sortSelect').addEventListener('change', function(e) {
+                currentSort = e.target.value;
+                renderGrid();
+            });
+        }
+
+        function renderGrid() {
+            var grid = document.getElementById('galleryGrid');
+            var items = appData.selection.slice();
+
+            if (activeFilter !== 'all') {
+                items = items.filter(function(s) { return s.cluster_id === activeFilter; });
+            }
+
+            switch (currentSort) {
+                case 'sim-desc':
+                    items.sort(function(a, b) { return b.style_similarity - a.style_similarity; });
+                    break;
+                case 'sim-asc':
+                    items.sort(function(a, b) { return a.style_similarity - b.style_similarity; });
+                    break;
+                case 'cluster':
+                    items.sort(function(a, b) { return a.cluster_id - b.cluster_id; });
+                    break;
+            }
+
+            if (items.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><i class="fa-regular fa-image"></i>Нет изображений в этом кластере</div>';
+                return;
+            }
+
+            grid.innerHTML = items.map(function(item, i) {
+                var color = getClusterColor(item.cluster_id);
+                var imgUrl = getImageUrl(item.file_path);
+                var sim = (item.style_similarity * 100).toFixed(1);
+                var delay = Math.min(i * 50, 600);
+                var origIndex = appData.selection.indexOf(item);
+
+                return '<article class="gallery-item" data-index="' + origIndex + '" style="animation-delay:' + delay + 'ms" tabindex="0" role="button">' +
+                    '<img class="gallery-item-img" src="' + imgUrl + '" alt="" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';">' +
+                    '<div class="img-placeholder" style="display:none"><i class="fa-regular fa-image"></i>' + extractFilename(item.file_path) + '</div>' +
+                    '<div class="gallery-item-badge"><span class="badge-dot" style="background:' + color.dot + '"></span>C' + item.cluster_id + '</div>' +
+                    '<div class="gallery-item-overlay"><div class="overlay-similarity">Style similarity</div><div class="overlay-value">' + sim + '%</div></div>' +
+                    '</article>';
+            }).join('');
+
+            grid.querySelectorAll('.gallery-item').forEach(function(el) {
+                el.addEventListener('click', function() { openModal(parseInt(el.dataset.index)); });
+                el.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') openModal(parseInt(el.dataset.index));
+                });
+            });
+
+            /* Повторная проверка после перерисовки */
+            if (!imagesFailed && Object.keys(imageMap).length === 0) {
+                checkImagesLoaded();
+            }
+        }
+
+        /* === Модальное окно === */
+        var modalBackdrop = document.getElementById('modalBackdrop');
+        var modal = document.getElementById('modal');
+        var currentModalIndex = -1;
+
+        function openModal(index) {
+            currentModalIndex = index;
+            var item = appData.selection[index];
+            var color = getClusterColor(item.cluster_id);
+            var sim = (item.style_similarity * 100).toFixed(1);
+            var imgUrl = getImageUrl(item.file_path);
+
+            var imgSide = document.getElementById('modalImageSide');
+            imgSide.innerHTML =
+                '<button class="modal-close" id="modalCloseInner" aria-label="Закрыть"><i class="fa-solid fa-xmark"></i></button>' +
+                '<img src="' + imgUrl + '" alt="" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';">' +
+                '<div class="nav-hint">← → для навигации</div>' +
+                '<div class="img-placeholder" style="display:none;height:100%;aspect-ratio:unset"><i class="fa-regular fa-image" style="font-size:48px"></i>Изображение недоступно</div>';
+
+            document.getElementById('modalCloseInner').addEventListener('click', closeModal);
+
+            /* Похожие */
+            var similarHtml = '';
+            if (appData.distance_matrix && appData.distance_matrix[index]) {
+                var distances = appData.distance_matrix[index]
+                    .map(function(d, i) { return { index: i, distance: d }; })
+                    .filter(function(d) { return d.index !== index; })
+                    .sort(function(a, b) { return a.distance - b.distance; })
+                    .slice(0, 6);
+
+                similarHtml = '<div class="similar-section-title">Похожие изображения</div><div class="similar-grid">';
+                distances.forEach(function(d) {
+                    var si = appData.selection[d.index];
+                    var siUrl = getImageUrl(si.file_path);
+                    var siColor = getClusterColor(si.cluster_id);
+                    similarHtml +=
+                        '<div class="similar-item" data-index="' + d.index + '">' +
+                        '<img src="' + siUrl + '" alt="" loading="lazy" onerror="this.style.display=\'none\';this.parentElement.querySelector(\'.img-placeholder\').style.display=\'flex\';">' +
+                        '<div class="img-placeholder" style="display:none"><i class="fa-regular fa-image"></i></div>' +
+                        '<div class="similar-item-distance"><span class="badge-dot" style="background:' + siColor.dot + ';width:5px;height:5px"></span>' + d.distance.toFixed(2) + '</div>' +
+                        '</div>';
+                });
+                similarHtml += '</div>';
+            }
+
+            var details = document.getElementById('modalDetails');
+            details.innerHTML =
+                '<div class="modal-detail-label">Файл</div>' +
+                '<div class="modal-detail-value mono">' + extractFilename(item.file_path) + '</div>' +
+
+                '<div class="modal-detail-label">Кластер</div>' +
+                '<div class="cluster-badge-lg" style="background:' + color.bg + ';color:' + color.text + '">' +
+                '<span class="badge-dot" style="background:' + color.dot + '"></span>Кластер ' + item.cluster_id + '</div>' +
+
+                '<div class="similarity-bar-wrapper">' +
+                '<div class="modal-detail-label">Style Similarity</div>' +
+                '<div style="display:flex;align-items:baseline;gap:8px;margin-top:4px">' +
+                '<span style="font-family:\'Cormorant Garamond\',serif;font-size:36px;font-weight:300;color:var(--fg)">' + sim + '</span>' +
+                '<span style="font-size:14px;color:var(--muted)">%</span></div>' +
+                '<div class="similarity-bar-bg"><div class="similarity-bar-fill" style="width:0%" id="simBar"></div></div></div>' +
+
+                '<div class="modal-detail-label">Путь</div>' +
+                '<div class="modal-detail-value mono" style="font-size:11px;margin-bottom:28px;line-height:1.7">' + item.file_path + '</div>' +
+
+                similarHtml;
+
+            /* Анимация полоски */
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    var bar = document.getElementById('simBar');
+                    if (bar) bar.style.width = sim + '%';
+                });
+            });
+
+            /* Клик по похожим */
+            details.querySelectorAll('.similar-item').forEach(function(el) {
+                el.addEventListener('click', function() { openModal(parseInt(el.dataset.index)); });
+            });
+
+            modalBackdrop.classList.add('open');
+            modal.classList.add('open');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeModal() {
+            modalBackdrop.classList.remove('open');
+            modal.classList.remove('open');
+            document.body.style.overflow = '';
+            currentModalIndex = -1;
+        }
+
+        modalBackdrop.addEventListener('click', closeModal);
+
+        document.addEventListener('keydown', function(e) {
+            if (modal.classList.contains('open')) {
+                if (e.key === 'Escape') closeModal();
+                if (e.key === 'ArrowLeft' && currentModalIndex > 0) openModal(currentModalIndex - 1);
+                if (e.key === 'ArrowRight' && currentModalIndex < appData.selection.length - 1) openModal(currentModalIndex + 1);
+            }
+        });
+
+        /* Drag & drop JSON на всю страницу */
+        document.addEventListener('dragover', function(e) { e.preventDefault(); });
+        document.addEventListener('drop', function(e) {
+            e.preventDefault();
+            if (document.getElementById('uploadScreen').classList.contains('hidden')) {
+                var file = e.dataTransfer.files[0];
+                if (file && (file.type === 'application/json' || file.name.endsWith('.json'))) {
+                    readJsonFile(file);
+                    showToast('JSON файл загружен');
+                }
+            }
+        });
+    </script>
+</body>
+</html>

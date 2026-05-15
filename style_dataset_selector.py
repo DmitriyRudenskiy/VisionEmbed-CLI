@@ -1,66 +1,91 @@
 """
-Продвинутая ООП Система отбора датасета для LoRA
-=================================================
+Продвинутая ООП Система отбора датасета для LoRA (улучшенная версия)
+====================================================================
 Запуск:
 python script.py --input-dir ./my_images --target-size 30 --output-json result.json
-(Опционально) --reference-dir ./style_references
+(Опционально) --reference-dir ./style_references --save-dist-matrix
+
+Изменения относительно базовой версии:
+- Нормализация штрафа за разнообразие (MMR) для единого диапазона с релевантностью.
+- Более безопасная заглушка tqdm.
+- Упрощённая инициализация меток кластеров.
+- Говорящие имена классов и переменных.
 """
 
-import os
-import glob
 import json
 import argparse
-import numpy as np
 import logging
-from typing import List, Tuple, Optional, Dict, Any
+from pathlib import Path
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-# Импорты зависимостей
+import numpy as np
+
+# -----------------------------------------------------------------------------
+# Зависимости
+# -----------------------------------------------------------------------------
 try:
     import cv2
-except ImportError:
-    cv2 = None
+except ImportError as e:
+    raise ImportError("Требуется OpenCV. Установите: pip install opencv-python") from e
 
 try:
     from sklearn.metrics.pairwise import cosine_similarity
     from sklearn.ensemble import IsolationForest
-    from sklearn.neighbors import LocalOutlierFactor
-    from sklearn.cluster import KMeans, DBSCAN
+    from sklearn.cluster import KMeans
 except ImportError as e:
-    raise ImportError(f"Требуется scikit-learn. Установите: pip install scikit-learn\n{e}")
+    raise ImportError(
+        f"Требуется scikit-learn. Установите: pip install scikit-learn\n{e}"
+    ) from e
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable=None, *args, **kwargs):
+        """Безопасная заглушка tqdm, возвращающая iterable без изменений."""
+        return iterable if iterable is not None else []
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 1. КОНФИГУРАЦИЯ И ИНТЕРФЕЙСЫ (STRATEGY PATTERN)
+# 1. КОНФИГУРАЦИЯ И ИНТЕРФЕЙСЫ
 # =============================================================================
 
 @dataclass
-class SelectionCriteria:
-    similarity_threshold: float = 0.5
-    similarity_weight: float = 0.5
+class MmrBalanceWeights:
+    """Веса для алгоритма MMR: Relevance (сходство) vs Diversity (разнообразие)."""
+    relevance_weight: float = 0.5
     diversity_weight: float = 0.5
 
-class EmbeddingModel(ABC):
-    @abstractmethod
-    def encode(self, images: List[np.ndarray], batch_size: int = 32) -> np.ndarray: ...
+    def __post_init__(self):
+        if self.relevance_weight < 0 or self.diversity_weight < 0:
+            raise ValueError("Веса должны быть неотрицательными.")
+        total = self.relevance_weight + self.diversity_weight
+        if total <= 0:
+            raise ValueError("Сумма весов должна быть больше 0.")
+        # Нормализация
+        self.relevance_weight /= total
+        self.diversity_weight /= total
 
-    @property
+
+class EmbeddingModel(ABC):
+    """Интерфейс модели эмбеддингов."""
     @abstractmethod
-    def dim(self) -> int: ...
+    def encode(self, images: list[np.ndarray]) -> np.ndarray: ...
+
 
 class OutlierDetector(ABC):
     @abstractmethod
     def detect(self, embeddings: np.ndarray) -> np.ndarray:
-        """Возвращает булеву маску (True - валидный, False - выброс)"""
+        """Возвращает булеву маску (True — валидный, False — выброс)."""
         ...
+
 
 class Clusterer(ABC):
     @abstractmethod
     def cluster(self, embeddings: np.ndarray) -> np.ndarray:
-        """Возвращает массив меток кластеров"""
+        """Возвращает массив меток кластеров."""
         ...
 
 
@@ -68,274 +93,383 @@ class Clusterer(ABC):
 # 2. КОНКРЕТНЫЕ РЕАЛИЗАЦИИ СТРАТЕГИЙ
 # =============================================================================
 
-class CLIPStyleEmbedding(EmbeddingModel):
-    """ЗАГЛУШКА: Замените на реальный вызов CLIP"""
-    def encode(self, images: List[np.ndarray], batch_size: int = 32) -> np.ndarray:
-        # Имитация батчинга для предотвращения OOM
-        embeddings = []
-        for i in range(0, len(images), batch_size):
-            batch = images[i:i + batch_size]
-            # model.get_image_features(batch)
-            embeddings.append(np.random.randn(len(batch), 512).astype(np.float32))
-        return np.vstack(embeddings)
+class RandomEmbeddingModel(EmbeddingModel):
+    """Генерирует воспроизводимые случайные эмбеддинги (заглушка).
+    В продакшене заменить на CLIP, DINOv2, EVA и т.д.
+    """
+    def __init__(self, dim: int = 512, seed: int = 42):
+        self._rng = np.random.default_rng(seed)
+        self._dim = dim
+        logger.warning("RandomEmbeddingModel активна: эмбеддинги генерируются случайно.")
 
-    @property
-    def dim(self) -> int: return 512
+    def encode(self, images: list[np.ndarray]) -> np.ndarray:
+        return self._rng.standard_normal((len(images), self._dim)).astype(np.float32)
+
 
 class IsolationForestDetector(OutlierDetector):
     def __init__(self, contamination: float = 0.1):
+        if not 0 < contamination <= 0.5:
+            raise ValueError("contamination должен быть в диапазоне (0, 0.5]")
         self.contamination = contamination
 
     def detect(self, embeddings: np.ndarray) -> np.ndarray:
-        iso = IsolationForest(contamination=self.contamination, random_state=42)
-        preds = iso.fit_predict(embeddings)
-        return preds != -1  # True для нормальных, False для выбросов
+        model = IsolationForest(
+            contamination=self.contamination, random_state=42, n_jobs=-1
+        )
+        return model.fit_predict(embeddings) != -1
 
-class KMeansClusterer(Clusterer):
+
+class KMeansImageClusterer(Clusterer):
     def __init__(self, max_clusters: int = 20):
+        if max_clusters < 2:
+            raise ValueError("max_clusters должен быть >= 2")
         self.max_clusters = max_clusters
 
     def cluster(self, embeddings: np.ndarray) -> np.ndarray:
         n = len(embeddings)
-        n_clusters = max(3, min(self.max_clusters, int(np.sqrt(n / 2))))
-        return KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit_predict(embeddings)
+        # Для маленьких датасетов нужно хотя бы 2 кластера
+        n_clusters = max(2, min(self.max_clusters, int(np.sqrt(n / 2))))
+        return KMeans(
+            n_clusters=n_clusters, random_state=42, n_init='auto'
+        ).fit_predict(embeddings)
 
 
 # =============================================================================
-# 3. УТИЛИТЫ (ЗАГРУЗЧИК И ЭКСПОРТЕР)
+# 3. ЗАГРУЗЧИК И ЭКСПОРТЕР
 # =============================================================================
 
-class ImageLoader:
-    SUPPORTED_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
+class ImageDirectoryLoader:
+    """Поиск путей и пакетная загрузка изображений из директории."""
+    SUPPORTED_EXTENSIONS = frozenset({'.jpg', '.jpeg', '.png', '.webp', '.bmp'})
 
     def __init__(self, directory: str):
-        if cv2 is None: raise ImportError("Требуется OpenCV")
-        # ИЗМЕНЕНИЕ: Сохраняем абсолютный путь к директории сразу
-        self.directory = os.path.abspath(directory)
+        self.directory = Path(directory).resolve()
+        if not self.directory.is_dir():
+            raise ValueError(f"Директория не найдена: {self.directory}")
 
-    def load(self) -> Tuple[List[np.ndarray], List[str]]:
-        images, paths = [], []
-        for path in self._scan_directory():
-            img = cv2.imread(path)
+    def get_paths(self) -> list[Path]:
+        paths = sorted(
+            p for p in self.directory.rglob('*')
+            if p.suffix.lower() in self.SUPPORTED_EXTENSIONS and p.is_file()
+        )
+        logger.info(f"Найдено {len(paths)} изображений в {self.directory}")
+        return paths
+
+    @staticmethod
+    def load_batch(paths: list[Path]) -> tuple[list[np.ndarray], list[Path]]:
+        images, valid_paths = [], []
+        for p in paths:
+            img = cv2.imread(str(p))
             if img is not None:
                 images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                # ИЗМЕНЕНИЕ: Преобразуем путь к файлу в абсолютный
-                paths.append(os.path.abspath(path))
-        logger.info(f"Загружено {len(images)} изображений из {self.directory}")
-        return images, paths
+                valid_paths.append(p)
+            else:
+                logger.warning(f"Не удалось загрузить (битый файл?): {p}")
+        return images, valid_paths
 
-    def _scan_directory(self) -> List[str]:
-        files = []
-        for ext in self.SUPPORTED_EXTENSIONS:
-            files.extend(glob.glob(os.path.join(self.directory, f"*{ext}")))
-            files.extend(glob.glob(os.path.join(self.directory, f"*{ext.upper()}")))
-        return files
 
-class ResultExporter:
+@dataclass
+class CurationResult:
+    """Контейнер результата курирования для передачи в экспортер."""
+    paths: list[Path]
+    embeddings: np.ndarray
+    scores: np.ndarray
+    clusters: np.ndarray
+
+
+class SelectionJsonExporter:
     @staticmethod
-    def export(selected_paths: List[str], selected_embeddings: np.ndarray,
-               selected_scores: np.ndarray, selected_clusters: np.ndarray, output_path: str):
+    def export(result: CurationResult, output_path: str,
+               save_dist_matrix: bool = False) -> None:
+        if not result.paths:
+            logger.warning("Нечего экспортировать — пустая выборка.")
+            return
 
-        # Вычисление матрицы расстояний
-        norm = selected_embeddings / (np.linalg.norm(selected_embeddings, axis=1, keepdims=True) + 1e-10)
-        sim_matrix = norm @ norm.T
-        np.fill_diagonal(sim_matrix, 1.0)
-        dist_matrix = 1 - sim_matrix
+        selection_data = [
+            {
+                "file_path": str(p),
+                "relevance_score": float(score),
+                "cluster_id": int(cluster),
+            }
+            for p, score, cluster in zip(result.paths, result.scores, result.clusters)
+        ]
 
-        # Формирование обогащенного JSON
-        selection_data = []
-        for i, path in enumerate(selected_paths):
-            selection_data.append({
-                "file_path": path,  # Здесь теперь будет абсолютный путь
-                "style_similarity": float(selected_scores[i]),
-                "cluster_id": int(selected_clusters[i])
-            })
-
-        result = {
+        payload = {
             "metadata": {
-                "total_selected": len(selected_paths),
-                "avg_similarity": float(np.mean(selected_scores))
+                "total_selected": len(result.paths),
+                "avg_relevance": float(np.mean(result.scores)),
             },
             "selection": selection_data,
-            "distance_matrix": dist_matrix.tolist()
         }
 
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=4, ensure_ascii=False)
-        logger.info(f"Результат сохранен в {output_path}")
+        out_file = Path(output_path)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_file, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=4, ensure_ascii=False)
+        logger.info(f"Результат сохранён в {out_file}")
+
+        if save_dist_matrix:
+            # Косинусное расстояние: 1 - сходство (используем уже нормализованные эмбеддинги)
+            normed = result.embeddings / (
+                np.linalg.norm(result.embeddings, axis=1, keepdims=True) + 1e-10
+            )
+            dist_matrix = 1.0 - (normed @ normed.T)
+            np.fill_diagonal(dist_matrix, 0.0)
+            dist_path = out_file.with_suffix('.npy')
+            np.save(dist_path, dist_matrix)
+            logger.info(f"Матрица расстояний сохранена в {dist_path}")
 
 
 # =============================================================================
-# 4. ЯДРО ЛОГИКИ ОТБОРА (Чистые функции/статика)
+# 4. ЯДРО ЛОГИКИ ОТБОРА (MMR)
 # =============================================================================
 
-class MMRSelector:
-    """Maximal Marginal Relevance алгоритм отбора"""
+class MaximalMarginalRelevanceSelector:
+    """Maximal Marginal Relevance: баланс репрезентативности и разнообразия."""
 
     @staticmethod
-    def select(embeddings: np.ndarray, cluster_labels: np.ndarray,
-               similarity_scores: np.ndarray, criteria: SelectionCriteria,
-               target_size: int) -> List[int]:
-
+    def select(
+        embeddings: np.ndarray,
+        cluster_labels: np.ndarray,
+        relevance_scores: np.ndarray,
+        weights: MmrBalanceWeights,
+        target_size: int,
+    ) -> list[int]:
         n = len(embeddings)
-        dist_matrix = MMRSelector._compute_distance_matrix(embeddings)
+        if n <= target_size:
+            return list(range(n))
+
+        normalized_embeddings = embeddings / (
+            np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-10
+        )
+        unique_labels = np.unique(cluster_labels)
 
         # 1. Гарантируем покрытие кластеров
-        selected = set()
-        for lab in np.unique(cluster_labels):
-            idx = np.where(cluster_labels == lab)[0]
-            selected.add(int(idx[np.argmax(similarity_scores[idx])]))
+        cluster_representatives: list[int] = []
+        for label in unique_labels:
+            indices_in_cluster = np.where(cluster_labels == label)[0]
+            best_index_in_cluster = indices_in_cluster[np.argmax(relevance_scores[indices_in_cluster])]
+            cluster_representatives.append(best_index_in_cluster)
+
+        # Сортируем представителей по релевантности
+        cluster_representatives.sort(key=lambda idx: relevance_scores[idx], reverse=True)
+
+        selected: list[int] = []
+        remaining = set(range(n))
+
+        # Добавляем представителей кластеров (не больше, чем target_size)
+        for rep_idx in cluster_representatives:
+            if len(selected) >= target_size:
+                break
+            selected.append(rep_idx)
+            remaining.discard(rep_idx)
 
         # 2. Жадный MMR добор
-        remaining = set(range(n)) - selected
-        selected_list = list(selected)
+        while len(selected) < target_size and remaining:
+            remaining_indices = np.array(list(remaining))
 
-        while len(selected_list) < target_size and remaining:
-            rem_arr = np.array(list(remaining))
-            sel_arr = np.array(selected_list)
+            # Сходство кандидатов с уже выбранными
+            sim_to_selected = normalized_embeddings[remaining_indices] @ normalized_embeddings[selected].T
 
-            min_dists = np.min(dist_matrix[np.ix_(rem_arr, sel_arr)], axis=1)
-            mmr = (criteria.similarity_weight * similarity_scores[rem_arr] +
-                   criteria.diversity_weight * min_dists)
+            # Максимальное сходство с любым уже выбранным элементом
+            max_sim = np.max(sim_to_selected, axis=1)
 
-            best = rem_arr[np.argmax(mmr)]
-            selected_list.append(int(best))
-            remaining.remove(best)
+            # Diversity: штрафуем за похожесть (приводим к диапазону ~[0,1], как у relevance)
+            diversity = 0.5 * np.maximum(0.0, 1.0 - max_sim)
 
-        return selected_list
+            mmr_scores = (
+                weights.relevance_weight * relevance_scores[remaining_indices]
+                + weights.diversity_weight * diversity
+            )
 
-    @staticmethod
-    def _compute_distance_matrix(features: np.ndarray) -> np.ndarray:
-        norm = features / (np.linalg.norm(features, axis=1, keepdims=True) + 1e-10)
-        sim = norm @ norm.T
-        np.fill_diagonal(sim, 1.0)
-        return 1 - sim
+            best_in_remaining_idx = np.argmax(mmr_scores)
+            best_overall_idx = int(remaining_indices[best_in_remaining_idx])
+
+            selected.append(best_overall_idx)
+            remaining.remove(best_overall_idx)
+
+        return selected
 
 
 # =============================================================================
-# 5. ОРКЕСТРАТОР ПАЙПЛАЙНА (FACADE)
+# 5. ОРКЕСТРАТОР ПАЙПЛАЙНА
 # =============================================================================
 
-class LoRADatasetCurator:
-    def __init__(self, model: EmbeddingModel, detector: OutlierDetector,
-                 clusterer: Clusterer, criteria: SelectionCriteria, target_size: int):
+class DatasetCurationPipeline:
+    def __init__(
+        self,
+        model: EmbeddingModel,
+        detector: OutlierDetector,
+        clusterer: Clusterer,
+        weights: MmrBalanceWeights,
+        target_size: int,
+        batch_size: int = 32,
+    ):
+        if target_size <= 0:
+            raise ValueError("target_size должен быть > 0")
         self.model = model
         self.detector = detector
         self.clusterer = clusterer
-        self.criteria = criteria
+        self.weights = weights
         self.target_size = target_size
+        self.batch_size = batch_size
 
-    def process(self, input_dir: str, reference_dir: Optional[str], output_json: str):
-        # 1. Загрузка данных
-        loader = ImageLoader(input_dir)
-        images, image_paths = loader.load()
-        if not images: return
+    def _compute_embeddings(self, paths: list[Path]) -> tuple[np.ndarray, list[Path]]:
+        all_emb: list[np.ndarray] = []
+        valid_paths: list[Path] = []
 
-        # 2. Загрузка референсов (если есть)
-        ref_embeddings = None
-        if reference_dir:
-            ref_loader = ImageLoader(reference_dir)
-            ref_images, _ = ref_loader.load()
-            if ref_images:
-                logger.info(f"Вычисление эмбеддингов для {len(ref_images)} референсов...")
-                ref_embeddings = self.model.encode(ref_images)
+        for i in tqdm(range(0, len(paths), self.batch_size), desc="Кодирование изображений"):
+            batch_paths = paths[i : i + self.batch_size]
+            images, batch_valid = ImageDirectoryLoader.load_batch(batch_paths)
+            if images:
+                all_emb.append(self.model.encode(images))
+                valid_paths.extend(batch_valid)
 
-        # 3. Эмбеддинги основного датасета
-        logger.info("Вычисление эмбеддингов датасета батчами...")
-        all_embeddings = self.model.encode(images, batch_size=32)
+        if not all_emb:
+            return np.empty((0, 0)), []
+        return np.vstack(all_emb), valid_paths
 
-        if len(images) <= self.target_size:
-            logger.info("Количество изображений <= target_size. Возврат всех файлов.")
-            scores = self._compute_scores(all_embeddings, ref_embeddings)
-            ResultExporter.export(image_paths, all_embeddings, scores, np.zeros(len(images)), output_json)
-            return
-
-        # 4. Фильтрация выбросов
-        logger.info("Фильтрация выбросов...")
-        valid_mask = self.detector.detect(all_embeddings)
-        valid_embeddings = all_embeddings[valid_mask]
-        valid_paths = [image_paths[i] for i in range(len(images)) if valid_mask[i]]
-
-        if len(valid_paths) <= self.target_size:
-            logger.info(f"После фильтрации осталось {len(valid_paths)} <= target_size.")
-            scores = self._compute_scores(valid_embeddings, ref_embeddings)
-            ResultExporter.export(valid_paths, valid_embeddings, scores, np.zeros(len(valid_paths)), output_json)
-            return
-
-        # 5. Кластеризация
-        logger.info("Кластеризация...")
-        cluster_labels = self.clusterer.cluster(valid_embeddings)
-
-        # 6. Скоринг сходства
-        logger.info("Вычисление скоров сходства со стилем...")
-        sim_scores = self._compute_scores(valid_embeddings, ref_embeddings)
-
-        # 7. MMR Отбор
-        logger.info(f"Отбор {self.target_size} изображений...")
-        selected_indices = MMRSelector.select(
-            embeddings=valid_embeddings,
-            cluster_labels=cluster_labels,
-            similarity_scores=sim_scores,
-            criteria=self.criteria,
-            target_size=self.target_size
-        )
-
-        # 8. Экспорт
-        ResultExporter.export(
-            selected_paths=[valid_paths[i] for i in selected_indices],
-            selected_embeddings=valid_embeddings[selected_indices],
-            selected_scores=sim_scores[selected_indices],
-            selected_clusters=cluster_labels[selected_indices],
-            output_path=output_json
-        )
-
-    def _compute_scores(self, embeddings: np.ndarray, ref_embeddings: Optional[np.ndarray]) -> np.ndarray:
-        """Вычисляет сходство с референсами или с центроидом датасета"""
-        if ref_embeddings is not None:
-            ref_center = ref_embeddings.mean(axis=0, keepdims=True)
-            return cosine_similarity(embeddings, ref_center).flatten()
+    @staticmethod
+    def _compute_relevance_scores(
+        embeddings: np.ndarray,
+        reference_embeddings: np.ndarray | None,
+    ) -> np.ndarray:
+        """Сходство с центром референсов. Если референсов нет – репрезентативность относительно центра датасета."""
+        if reference_embeddings is not None and len(reference_embeddings) > 0:
+            center = reference_embeddings.mean(axis=0, keepdims=True)
         else:
-            logger.warning("Референсы не заданы. Скоринг ведется относительно центра датасета.")
+            logger.info("Референсы не заданы. Скоринг относительно центра датасета (репрезентативность).")
             center = embeddings.mean(axis=0, keepdims=True)
-            return cosine_similarity(embeddings, center).flatten()
+        return cosine_similarity(embeddings, center).flatten()
+
+    def process(
+        self,
+        input_dir: str,
+        reference_dir: str | None,
+        output_json: str,
+        save_dist_matrix: bool = False,
+    ) -> None:
+        loader = ImageDirectoryLoader(input_dir)
+        image_paths = loader.get_paths()
+
+        if not image_paths:
+            logger.warning("Нет изображений для обработки.")
+            return
+
+        # 1. Референсы
+        reference_embeddings: np.ndarray | None = None
+        if reference_dir:
+            ref_loader = ImageDirectoryLoader(reference_dir)
+            ref_paths = ref_loader.get_paths()
+            if ref_paths:
+                logger.info(f"Вычисление эмбеддингов для {len(ref_paths)} референсов...")
+                reference_embeddings, _ = self._compute_embeddings(ref_paths)
+
+        # 2. Основной датасет
+        logger.info("Вычисление эмбеддингов датасета...")
+        current_embeddings, current_paths = self._compute_embeddings(image_paths)
+
+        if not current_paths:
+            logger.warning("Все изображения оказались битыми или не поддерживаются.")
+            return
+
+        # Инициализация кластерных меток (по умолчанию всё в одном кластере)
+        current_clusters = np.zeros(len(current_paths), dtype=int)
+
+        # 3. Фильтрация выбросов и кластеризация (только если данных больше целевого)
+        if len(current_paths) > self.target_size:
+            logger.info("Фильтрация выбросов...")
+            valid_samples_mask = self.detector.detect(current_embeddings)
+            current_embeddings = current_embeddings[valid_samples_mask]
+            current_paths = [p for p, is_valid in zip(current_paths, valid_samples_mask) if is_valid]
+
+            if len(current_paths) > self.target_size:
+                logger.info("Кластеризация...")
+                current_clusters = self.clusterer.cluster(current_embeddings)
+            else:
+                logger.info(f"После фильтрации осталось {len(current_paths)} ≤ target_size. Кластеризация пропущена.")
+        else:
+            logger.info("Размер датасета ≤ target_size, MMR и фильтрация не требуются.")
+
+        # 4. Скоринг
+        logger.info("Вычисление метрик релевантности...")
+        relevance_scores = self._compute_relevance_scores(current_embeddings, reference_embeddings)
+
+        # 5. MMR Отбор (если нужно)
+        if len(current_paths) > self.target_size:
+            logger.info(f"Отбор {self.target_size} изображений по MMR...")
+            selected_indices = MaximalMarginalRelevanceSelector.select(
+                embeddings=current_embeddings,
+                cluster_labels=current_clusters,
+                relevance_scores=relevance_scores,
+                weights=self.weights,
+                target_size=self.target_size,
+            )
+            current_embeddings = current_embeddings[selected_indices]
+            current_paths = [current_paths[i] for i in selected_indices]
+            relevance_scores = relevance_scores[selected_indices]
+            current_clusters = current_clusters[selected_indices]
+
+        # 6. Экспорт
+        result = CurationResult(
+            paths=current_paths,
+            embeddings=current_embeddings,
+            scores=relevance_scores,
+            clusters=current_clusters,
+        )
+        SelectionJsonExporter.export(result, output_json, save_dist_matrix)
 
 
 # =============================================================================
 # 6. КОНСОЛЬНЫЙ ИНТЕРФЕЙС
 # =============================================================================
 
-def main():
-    parser = argparse.ArgumentParser(description="ООП Система отбора датасета для LoRA.")
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="ООП Система отбора и курирования датасета для LoRA (улучшенная версия)."
+    )
     parser.add_argument("--input-dir", type=str, required=True, help="Папка с исходными картинками")
-    parser.add_argument("--target-size", type=int, required=True, help="Желаемое количество картинок")
+    parser.add_argument("--target-size", type=int, required=True, help="Желаемое количество картинок в выборке")
     parser.add_argument("--output-json", type=str, default="result.json", help="Путь к JSON файлу")
-    parser.add_argument("--reference-dir", type=str, default=None, help="Папка с эталонными картинками стиля (опционально)")
+    parser.add_argument("--reference-dir", type=str, default=None, help="Папка с эталонными картинками стиля")
+    parser.add_argument("--save-dist-matrix", action="store_true", help="Сохранить матрицу расстояний (.npy)")
+    parser.add_argument("--contamination", type=float, default=0.1, help="Доля выбросов для IsolationForest")
+    parser.add_argument("--max-clusters", type=int, default=20, help="Макс. число кластеров для KMeans")
+    parser.add_argument("--relevance-weight", type=float, default=0.5, help="Вес схожести/репрезентативности (MMR)")
+    parser.add_argument("--diversity-weight", type=float, default=0.5, help="Вес разнообразия (MMR)")
+    parser.add_argument("--batch-size", type=int, default=32, help="Размер батча при кодировании")
     args = parser.parse_args()
 
-    if not os.path.isdir(args.input_dir):
-        print(f"Ошибка: Директория '{args.input_dir}' не найдена.")
+    if not Path(args.input_dir).is_dir():
+        logger.error(f"Директория '{args.input_dir}' не найдена.")
         return
 
-    # Сборка пайплайна (Composition Root)
-    model = CLIPStyleEmbedding()
-    detector = IsolationForestDetector(contamination=0.1)
-    clusterer = KMeansClusterer(max_clusters=20)
-    criteria = SelectionCriteria()
+    # Инициализация компонентов
+    model = RandomEmbeddingModel()
+    detector = IsolationForestDetector(contamination=args.contamination)
+    clusterer = KMeansImageClusterer(max_clusters=args.max_clusters)
+    weights = MmrBalanceWeights(
+        relevance_weight=args.relevance_weight,
+        diversity_weight=args.diversity_weight,
+    )
 
-    curator = LoRADatasetCurator(
+    pipeline = DatasetCurationPipeline(
         model=model,
         detector=detector,
         clusterer=clusterer,
-        criteria=criteria,
-        target_size=args.target_size
+        weights=weights,
+        target_size=args.target_size,
+        batch_size=args.batch_size,
     )
 
-    curator.process(
+    pipeline.process(
         input_dir=args.input_dir,
         reference_dir=args.reference_dir,
-        output_json=args.output_json
+        output_json=args.output_json,
+        save_dist_matrix=args.save_dist_matrix,
     )
 
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     main()
