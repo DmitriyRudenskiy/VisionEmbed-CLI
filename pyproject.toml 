@@ -1,0 +1,186 @@
+[project]
+name = "VisionEmbed-CLI"
+version = "0.1.0"
+description = "Описание вашего проекта"
+requires-python = ">=3.12"
+authors = [
+    { name = "Your Name", email = "you@example.com" }
+]
+dependencies = []
+dynamic = ["readme"]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "pytest>=8.0",
+    "coverage>=7.0",
+]
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ---------- Ruff (линтер + форматтер) ----------
+[tool.ruff]
+target-version = "py312"   # версия Python, на которую ориентирован проект
+line-length = 100
+indent-width = 4
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "migrations",
+    "tests/fixtures",
+]
+# Включить предварительные правила (Preview)
+preview = true
+
+[tool.ruff.lint]
+# Набор правил: максимально широкий, но без излишней строгости
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes (неиспользуемые переменные, ошибки импорта)
+    "I",      # isort (порядок импортов)
+    "N",      # pep8-naming (именование)
+    "UP",     # pyupgrade (обновление синтаксиса до современного)
+    "B",      # flake8-bugbear (потенциальные ошибки)
+    "SIM",    # flake8-simplify (упрощение кода)
+    "C4",     # flake8-comprehensions (улучшение comprehensions)
+    "T20",    # flake8-print (вызовы print)
+    "TID",    # flake8-tidy-imports (относительные импорты)
+    "RUF",    # Специфичные для Ruff правила
+    "PERF",   # perflint (проблемы производительности)
+    "PLE",    # PyLint errors
+    "PLC",    # PyLint convention
+    "PLW",    # PyLint warnings
+    "PLR",    # PyLint refactor (переработка)
+    "ARG",    # flake8-unused-arguments (неиспользуемые аргументы)
+    "PTH",    # flake8-use-pathlib (использование pathlib)
+    "TRY",    # tryceratops (исключения)
+    "FLY",    # flynt (конвертация в f-строки)
+    "ISC",    # flake8-implicit-str-concat (неявная конкатенация строк)
+    "FURB",   # refurb (модернизация кода)
+    "YTT",    # flake8-2020 (неправильное сравнение дат)
+    "ASYNC",  # flake8-async (проблемы с async)
+    "DTZ",    # flake8-datetimez (использование datetime без таймзоны)
+    "EM",     # flake8-errmsg (стиль сообщений исключений)
+    "RET",    # flake8-return (лишние return/else)
+    "PD",     # pandas-vet (если используете pandas)
+    "S",      # flake8-bandit (безопасность)
+]
+
+# Правила, которые игнорируются глобально
+ignore = [
+    "E501",    # line-too-long (управляется line-length)
+    "E203",    # whitespace before ':' (конфликт с форматтером)
+    "B008",    # вызовы функций в значениях аргументов по умолчанию
+    "PLR0913", # too many arguments (по желанию)
+    "S101",    # assert (часто нужен в тестах)
+    "T201",    # print found (можно разрешить глобально)
+    "UP035",   # typing.List -> list (может ломать код при обратной совместимости)
+]
+
+# Игнорирование для определённых файлов/путей
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101",      # assert разрешён
+    "PLR2004",   # магические числа в тестах
+    "ARG001",    # неиспользуемые аргументы в фикстурах
+    "PLR6301",   # методы без self в тестовых классах
+]
+"__init__.py" = [
+    "F401",      # неиспользуемые импорты, которые реэкспортируются
+    "E402",      # импорты не в начале файла (иногда нужны)
+]
+
+# Настройки для конкретных плагинов
+[tool.ruff.lint.isort]
+known-first-party = ["VisionEmbed-CLI"]   # замените на имя вашего главного пакета
+relative-imports-order = "closest-to-furthest"
+
+[tool.ruff.lint.flake8-errmsg]
+max-string-length = 80
+
+[tool.ruff.lint.flake8-return]
+max-return-args = 3
+
+[tool.ruff.lint.flake8-bandit]
+hardcoded-tmp-directory = true
+
+# Настройки форматтера
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# ---------- Mypy (статическая типизация) ----------
+[tool.mypy]
+python_version = "3.12"
+strict = true                           # включает почти все строгие флаги
+ignore_missing_imports = true           # для библиотек без stub-файлов
+check_untyped_defs = true               # проверять тела функций без аннотаций
+warn_return_any = true                  # предупреждать при возврате Any
+warn_unused_ignores = true              # неиспользуемые # type: ignore
+warn_redundant_casts = true             # лишние приведения типов
+warn_unused_configs = true              # неиспользуемые настройки mypy
+disallow_subclassing_any = true         # нельзя наследоваться от Any
+disallow_untyped_calls = false          # разрешить вызов нетипизированных функций
+disallow_untyped_defs = false           # не требовать аннотации во всех функциях
+disallow_incomplete_defs = false        # не требовать полной аннотации всех аргументов
+no_implicit_optional = true             # Optional только при None в значении по умолчанию
+warn_no_return = true                   # функции, которые должны что-то вернуть
+show_error_codes = true                 # показывать коды ошибок
+pretty = true                           # красивый вывод ошибок
+exclude = [
+    "^build/",
+    "^dist/",
+    "^\\.venv/",
+    "migrations",
+]
+plugins = []                            # можно добавить, например, "pydantic.mypy"
+
+# Переопределения для модулей без аннотаций
+[[tool.mypy.overrides]]
+module = [
+    "numpy.*",
+    "pandas.*",
+    "tests.*",
+]
+ignore_missing_imports = true
+
+# ---------- Pytest ----------
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = [
+    "--verbose",
+    "--strict-markers",
+    "--tb=short",
+    "--cov=VisionEmbed-CLI",   # замените на имя вашего пакета
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-fail-under=80",
+]
+testpaths = ["tests"]
+
+# ---------- Coverage ----------
+[tool.coverage.run]
+source = ["VisionEmbed-CLI"]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

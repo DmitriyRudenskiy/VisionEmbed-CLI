@@ -1,4 +1,3 @@
-import os
 import re
 import json
 import logging
@@ -7,7 +6,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Set, List, Dict, Tuple
+from typing import Set, List, Tuple
 from dataclasses import dataclass, asdict
 
 import torch

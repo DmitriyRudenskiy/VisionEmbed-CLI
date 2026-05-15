@@ -16,12 +16,10 @@ import time
 import warnings
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from functools import partial
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, Protocol
+from typing import Protocol
 
-import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 # --- Environment & Warnings ---
@@ -223,7 +221,7 @@ class OptimizedInferenceEngine:
 
     def _build_pipeline(self):
         """Load with optimizations"""
-        from transformers import pipeline, AutoImageProcessor
+        from transformers import pipeline
 
         logger.info(f"🚀 Loading model: {self.config.model_id} on {self.device.upper()}")
 
@@ -379,7 +377,7 @@ class MetricsCollector:
         avg_io = sum(self.stats['io_times']) / len(self.stats['io_times']) if self.stats['io_times'] else 0
 
         logger.info(f"\n{'=' * 50}")
-        logger.info(f"📊 PERFORMANCE REPORT")
+        logger.info("📊 PERFORMANCE REPORT")
         logger.info(f"{'=' * 50}")
         logger.info(f"Total images: {total_images}")
         logger.info(f"Total time: {total_time:.1f}s")

@@ -85,7 +85,7 @@ def main():
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(recognized_text)
 
-        print(f"\n--- Готово! ---")
+        print("\n--- Готово! ---")
         print(f"Текст успешно сохранен в файл: {output_path}")
 
     except Exception as e:

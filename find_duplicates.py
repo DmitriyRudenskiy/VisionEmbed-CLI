@@ -278,12 +278,12 @@ def generate_html_report(groups, output_dir):
         group.sort(key=lambda x: x['size'], reverse=True)
         html_content += f'<div class="group"><div class="group-header">Группа #{i + 1} ({len(group)} файлов)</div><div class="images-row">'
         for idx, file_info in enumerate(group):
-            path = file_info['path'];
-            name = file_info['name'];
+            path = file_info['path']
+            name = file_info['name']
             size = file_info['size']
             file_uri = ('file:///' + path.replace(os.sep, '/')) if os.name == 'nt' else ('file://' + path)
-            safe_val = html.escape(path);
-            safe_uri = html.escape(file_uri);
+            safe_val = html.escape(path)
+            safe_uri = html.escape(file_uri)
             safe_name = html.escape(name)
             block_class = "image-block first" if idx == 0 else "image-block"
             html_content += f"""
