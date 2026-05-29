@@ -1,3 +1,29 @@
+# 1. Установка зависимостей
+pip install easy-dwpose opencv-python numpy
+
+# 2. Построение базы (аналогично настройкам на скриншоте: body+hands, face off, resolution 1024)
+python pose_dataset_builder.py build \
+    -i /path/to/video_frames \
+    -o my_dataset.db \
+    --device cuda:0 \
+    --min-conf 0.3 \
+    --min-change 0.08 \
+    --resolution 1024
+
+# 3. Экспорт чистого датасета
+python pose_dataset_builder.py export \
+    --db my_dataset.db \
+    --out ./clean_dataset
+
+
+python3 /Users/user/PycharmProjects/VisionEmbed-CLI/pose_dataset_builder.py build \
+    -i . \
+    -o my_dataset.db \
+    --device cuda:0 \
+    --min-conf 0.3 \
+    --min-change 0.08 \
+    --resolution 1024
+
 # Использование моделей с llama.cpp
 
 ## Обзор

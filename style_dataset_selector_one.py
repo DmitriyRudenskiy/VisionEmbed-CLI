@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ except ImportError as exc:
 
 try:
     import torch
+
     TORCH_AVAILABLE = True
 except ImportError:
     torch = None  # type: ignore[assignment]
@@ -56,8 +58,10 @@ try:
 except ImportError:
     _tqdm = None  # type: ignore[assignment]
 
+
 def _noop_progress_bar(iterable, **kwargs):
     return iterable
+
 
 progress_bar = _tqdm if _tqdm is not None else _noop_progress_bar
 
@@ -128,6 +132,7 @@ class CurationPipelineConfig:
     input_directory: str
     output_json_path: str
     reference_directory: Optional[str] = None
+    output_directory: str = "selected"  # По умолчанию копируем в папку selected
 
     target_subset_size: int = 100
     max_clusters: int = DEFAULT_MAX_CLUSTERS
@@ -153,6 +158,7 @@ class CurationPipelineConfig:
 
 class EmbeddingExtractor(ABC):
     """Интерфейс извлечения нормализованных векторных представлений изображений."""
+
     @property
     @abstractmethod
     def embedding_dimension(self) -> int: ...
@@ -165,12 +171,14 @@ class EmbeddingExtractor(ABC):
 
 class OutlierDetector(ABC):
     """Интерфейс детектора аномалий в пространстве эмбеддингов."""
+
     @abstractmethod
     def compute_inlier_mask(self, embeddings: np.ndarray) -> np.ndarray: ...
 
 
 class ClusterAssigner(ABC):
     """Интерфейс назначения кластерных меток."""
+
     @abstractmethod
     def compute_cluster_labels(self, embeddings: np.ndarray, max_clusters: int) -> np.ndarray: ...
 
@@ -184,10 +192,10 @@ class CLIPEmbeddingExtractor(EmbeddingExtractor):
     _model_cache: dict[str, SentenceTransformer] = {}
 
     def __init__(
-        self,
-        model_name: str = DEFAULT_CLIP_MODEL_NAME,
-        use_gpu: bool = True,
-        batch_size: int = DEFAULT_BATCH_SIZE,
+            self,
+            model_name: str = DEFAULT_CLIP_MODEL_NAME,
+            use_gpu: bool = True,
+            batch_size: int = DEFAULT_BATCH_SIZE,
     ):
         if SentenceTransformer is None:
             raise ImportError("Требуется sentence-transformers. Установите: pip install sentence-transformers")
@@ -205,7 +213,7 @@ class CLIPEmbeddingExtractor(EmbeddingExtractor):
             )
 
         self._model = self._model_cache[model_name]
-        self._embedding_dim = self._model.get_sentence_embedding_dimension()
+        self._embedding_dim = self._model.get_embedding_dimension()
         logger.info("CLIP готов. Размерность эмбеддингов: %d", self._embedding_dim)
 
     @property
@@ -234,6 +242,7 @@ class CLIPEmbeddingExtractor(EmbeddingExtractor):
 
 class IsolationForestOutlierDetector(OutlierDetector):
     """Детектор выбросов на основе Isolation Forest."""
+
     def __init__(self, contamination: float = 0.1, random_seed: int = DEFAULT_RANDOM_SEED):
         if not 0.0 < contamination <= 0.5:
             raise ValueError("contamination должен быть в диапазоне (0, 0.5]")
@@ -256,6 +265,7 @@ class IsolationForestOutlierDetector(OutlierDetector):
 
 class AdaptiveKMeansClusterer(ClusterAssigner):
     """K-Means с адаптивным выбором числа кластеров: max(2, min(max_k, sqrt(N/2)))."""
+
     def __init__(self, random_seed: int = DEFAULT_RANDOM_SEED):
         self.random_seed = random_seed
 
@@ -273,7 +283,6 @@ class AdaptiveKMeansClusterer(ClusterAssigner):
             random_state=self.random_seed,
             n_init=10,
             max_iter=300,
-            n_jobs=-1,
         )
         return kmeans.fit_predict(embeddings)
 
@@ -360,7 +369,8 @@ def save_selection_to_json(result: CurationResult, output_path: str) -> None:
             "total_selected": result.count,
             "relevance_statistics": relevance_stats,
             "cluster_distribution": cluster_distribution,
-            "embedding_dimension": result.original_embeddings.shape[1] if result.original_embeddings is not None else None,
+            "embedding_dimension": result.original_embeddings.shape[
+                1] if result.original_embeddings is not None else None,
         },
         "selection": result.to_serializable_list(),
     }
@@ -372,6 +382,40 @@ def save_selection_to_json(result: CurationResult, output_path: str) -> None:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
     logger.info("Результаты сохранены: %s (%d изображений)", out_file, result.count)
+
+
+def copy_selected_files(result: CurationResult, output_dir: str, base_dir: str) -> None:
+    """
+    Копирование отобранных файлов в отдельную директорию с сохранением структуры поддиректорий.
+    """
+    if not result.selected_paths:
+        return
+
+    out_path = Path(output_dir).resolve()
+    base_path = Path(base_dir).resolve()
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Копирование %d отобранных файлов в %s...", result.count, out_path)
+
+    for src_file in result.selected_paths:
+        try:
+            # Вычисляем относительный путь, чтобы сохранить структуру папок
+            rel_path = src_file.relative_to(base_path)
+            dst_file = out_path / rel_path
+        except ValueError:
+            # Если файл почему-то не внутри base_dir, просто берём имя файла
+            dst_file = out_path / src_file.name
+
+        # Создаём поддиректории при необходимости
+        dst_file.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            shutil.copy2(src_file, dst_file)
+            logger.info("  ✓ Скопирован: %s -> %s", src_file, dst_file)
+        except Exception as exc:
+            logger.warning("  ✗ Не удалось скопировать %s: %s", src_file, exc)
+
+    logger.info("✅ Копирование файлов завершено.")
 
 
 def save_distance_matrix(embeddings: np.ndarray, base_output_path: str) -> None:
@@ -395,11 +439,11 @@ def save_distance_matrix(embeddings: np.ndarray, base_output_path: str) -> None:
 # =============================================================================
 
 def mmr_select(
-    embeddings: np.ndarray,
-    cluster_labels: np.ndarray,
-    relevance_scores: np.ndarray,
-    config: DiversitySelectionParams,
-    target_size: int,
+        embeddings: np.ndarray,
+        cluster_labels: np.ndarray,
+        relevance_scores: np.ndarray,
+        config: DiversitySelectionParams,
+        target_size: int,
 ) -> list[int]:
     """
     Жадный отбор по принципу Maximal Marginal Relevance.
@@ -478,12 +522,13 @@ class ImageCurationPipeline:
     Полный пайплайн отбора изображений:
     загрузка → эмбеддинги → фильтрация выбросов → кластеризация → MMR → экспорт.
     """
+
     def __init__(
-        self,
-        extractor: EmbeddingExtractor,
-        outlier_detector: OutlierDetector,
-        cluster_assigner: ClusterAssigner,
-        config: CurationPipelineConfig,
+            self,
+            extractor: EmbeddingExtractor,
+            outlier_detector: OutlierDetector,
+            cluster_assigner: ClusterAssigner,
+            config: CurationPipelineConfig,
     ):
         self.extractor = extractor
         self.outlier_detector = outlier_detector
@@ -509,7 +554,7 @@ class ImageCurationPipeline:
         batch_progress = progress_bar(batch_indices, desc="Извлечение эмбеддингов", unit="батч")
 
         for start_idx in batch_progress:
-            batch_paths = paths[start_idx : start_idx + self.config.batch_size]
+            batch_paths = paths[start_idx: start_idx + self.config.batch_size]
             images, batch_valid, _ = load_and_preprocess_images(batch_paths)
 
             if images:
@@ -518,7 +563,8 @@ class ImageCurationPipeline:
                     all_embeddings.append(batch_emb)
                     valid_paths.extend(batch_valid)
                 except Exception as exc:
-                    logger.warning("Ошибка при обработке батча %d-%d: %s", start_idx, start_idx+len(batch_paths)-1, exc)
+                    logger.warning("Ошибка при обработке батча %d-%d: %s", start_idx, start_idx + len(batch_paths) - 1,
+                                   exc)
 
         if not all_embeddings:
             return np.empty((0, self.extractor.embedding_dimension)), []
@@ -526,9 +572,9 @@ class ImageCurationPipeline:
         return np.vstack(all_embeddings), valid_paths
 
     def _compute_relevance_scores(
-        self,
-        embeddings: np.ndarray,
-        reference_embeddings: Optional[np.ndarray],
+            self,
+            embeddings: np.ndarray,
+            reference_embeddings: Optional[np.ndarray],
     ) -> np.ndarray:
         """Релевантность: к референсам или к центроиду датасета."""
         if reference_embeddings is not None and len(reference_embeddings) > 0:
@@ -667,6 +713,8 @@ def parse_cli_arguments() -> argparse.Namespace:
     parser.add_argument("--input-dir", type=str, required=True, help="Директория с исходными изображениями")
     parser.add_argument("--target-size", type=int, required=True, help="Желаемое количество изображений в выборке")
     parser.add_argument("--output-json", type=str, default="selection_result.json", help="Путь к выходному JSON")
+    parser.add_argument("--output-dir", type=str, default="selected",
+                        help="Директория для копирования отобранных изображений")
     parser.add_argument("--reference-dir", type=str, default=None, help="Директория с референсными изображениями")
     parser.add_argument("--relevance-weight", type=float, default=0.5, help="Вес релевантности в MMR (0.0–1.0)")
     parser.add_argument("--max-clusters", type=int, default=DEFAULT_MAX_CLUSTERS, help="Максимальное число кластеров")
@@ -694,6 +742,7 @@ def main() -> int:
         input_directory=args.input_dir,
         output_json_path=args.output_json,
         reference_directory=args.reference_dir,
+        output_directory=args.output_dir,
         target_subset_size=args.target_size,
         max_clusters=args.max_clusters,
         batch_size=args.batch_size,
@@ -732,7 +781,20 @@ def main() -> int:
     )
 
     result = pipeline.run()
-    return 0 if result is not None else 1
+
+    # Если пайплайн успешен, выводим список отобранных файлов и копируем их
+    if result is not None:
+        logger.info("=" * 60)
+        logger.info("📋 Список отобранных файлов (%d шт.):", result.count)
+        for file_path in result.selected_paths:
+            logger.info("  • %s", file_path)
+        logger.info("=" * 60)
+
+        if config.output_directory:
+            copy_selected_files(result, config.output_directory, config.input_directory)
+        return 0
+
+    return 1
 
 
 if __name__ == "__main__":
