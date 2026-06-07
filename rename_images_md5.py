@@ -1,6 +1,6 @@
+import hashlib
 import os
 import sys
-import hashlib
 
 
 def get_md5(filepath):
@@ -16,7 +16,12 @@ def process_directory(directory):
     valid_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
 
     try:
-        files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+        # ИСПРАВЛЕНИЕ 1: Добавлено условие not f.startswith('.')
+        # Это проигнорирует файлы ._*.jpg, .DS_Store и другие системные файлы
+        files = [
+            f for f in os.listdir(directory)
+            if os.path.isfile(os.path.join(directory, f)) and not f.startswith('.')
+        ]
     except FileNotFoundError:
         print(f"Ошибка: Директория '{directory}' не найдена.")
         return
@@ -30,6 +35,10 @@ def process_directory(directory):
 
         try:
             file_hash = get_md5(old_path)
+        except FileNotFoundError:
+            # ИСПРАВЛЕНИЕ 2: Обработка ситуации, когда файл исчез прямо во время работы скрипта
+            print(f"Файл не найден (возможно, был удален): {filename}")
+            continue
         except PermissionError:
             print(f"Нет доступа к файлу: {filename}")
             continue
@@ -44,13 +53,11 @@ def process_directory(directory):
         # Проверка на существование файла
         if os.path.exists(new_path):
             # Добавляем постфикс _duplicate перед расширением
-            # Пример: hash_duplicate.jpg
             base_new_name = f"{file_hash}_duplicate"
             new_filename = f"{base_new_name}{ext}"
             new_path = os.path.join(directory, new_filename)
 
             # Если и такой файл существует, добавляем счетчик
-            # Пример: hash_duplicate_1.jpg
             counter = 1
             while os.path.exists(new_path):
                 new_filename = f"{base_new_name}_{counter}{ext}"

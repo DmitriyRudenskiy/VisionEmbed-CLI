@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Локальная база YouTube-роликов</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        .video-thumbnail { width: 120px; height: 90px; object-fit: cover; border-radius: 4px; }
+        .tag-badge { font-size: 0.75rem; }
+        .table-videos td { vertical-align: middle; }
+        .empty-state { padding: 60px 20px; text-align: center; color: #6c757d; }
+        .search-box { max-width: 400px; }
+    </style>
+</head>
+<body class="bg-light">
+
+<div class="container py-4">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="mb-0"><i class="bi bi-youtube text-danger"></i> База YouTube-роликов</h2>
+        <div>
+            <button class="btn btn-outline-secondary btn-sm" onclick="exportDB()">
+                <i class="bi bi-download"></i> Экспорт JSON
+            </button>
+            <label class="btn btn-outline-secondary btn-sm mb-0">
+                <i class="bi bi-upload"></i> Импорт JSON
+                <input type="file" id="importFile" accept=".json" style="display:none" onchange="importDB(this)">
+            </label>
+            <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#videoModal" onclick="resetForm()">
+                <i class="bi bi-plus-lg"></i> Добавить
+            </button>
+        </div>
+    </div>
+
+    <!-- Stats & Search -->
+    <div class="card mb-3">
+        <div class="card-body d-flex flex-wrap gap-3 justify-content-between align-items-center">
+            <div class="text-muted small">
+                Всего роликов: <strong id="totalCount">0</strong>
+            </div>
+            <div class="search-box w-100 w-md-auto">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" id="searchInput" placeholder="Поиск по названию, описанию, тегам..." onkeyup="renderTable()">
+                </div>
+            </div>
+            <select class="form-select form-select-sm w-auto" id="categoryFilter" onchange="renderTable()">
+                <option value="">Все категории</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Table -->
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-videos table-hover mb-0">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Превью</th>
+                        <th>Название</th>
+                        <th>Категория</th>
+                        <th>Теги</th>
+                        <th>Дата добавления</th>
+                        <th class="text-end">Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="videosTable">
+                    <!-- JS fills this -->
+                </tbody>
+            </table>
+        </div>
+        <div id="emptyState" class="empty-state" style="display:none;">
+            <i class="bi bi-film display-4"></i>
+            <p class="mt-2">База пуста. Добавьте первый ролик.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Modal -->
+<div class="modal fade" id="videoModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalTitle">Добавить ролик</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="videoForm" onsubmit="saveVideo(event)">
+                    <input type="hidden" id="videoId">
+                    <div class="mb-3">
+                        <label class="form-label">Ссылка YouTube *</label>
+                        <input type="url" class="form-control" id="videoUrl" placeholder="https://www.youtube.com/watch?v=..." required onblur="parseUrl()">
+                        <div class="form-text">Поддерживаются обычные ссылки, short и youtu.be</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">YouTube ID</label>
+                        <input type="text" class="form-control" id="youtubeId" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Название *</label>
+                        <input type="text" class="form-control" id="videoTitle" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Описание</label>
+                        <textarea class="form-control" id="videoDesc" rows="2"></textarea>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Категория</label>
+                            <input type="text" class="form-control" id="videoCategory" list="categoryList" placeholder="Например: Обучение">
+                            <datalist id="categoryList"></datalist>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Теги (через запятую)</label>
+                            <input type="text" class="form-control" id="videoTags" placeholder="js, tutorial, 2026">
+                        </div>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <button type="button" class="btn btn-outline-danger" id="deleteBtn" style="display:none" onclick="deleteCurrent()">
+                            <i class="bi bi-trash"></i> Удалить
+                        </button>
+                        <div>
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                            <button type="submit" class="btn btn-primary">Сохранить</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const STORAGE_KEY = 'youtube_local_db';
+
+// ---------- Core ----------
+
+function getVideos() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+}
+
+function saveVideos(videos) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(videos));
+}
+
+function extractYoutubeId(url) {
+    if (!url) return '';
+    const patterns = [
+        /youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/,
+        /youtu\.be\/([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
+    ];
+    for (let p of patterns) {
+        const m = url.match(p);
+        if (m) return m[1];
+    }
+    return '';
+}
+
+function parseUrl() {
+    const url = $('#videoUrl').val();
+    const id = extractYoutubeId(url);
+    $('#youtubeId').val(id);
+    // Auto-fetch title if empty (basic heuristic — in real app you'd use oEmbed)
+    if (id && !$('#videoTitle').val()) {
+        $('#videoTitle').val('Ролик ' + id);
+    }
+}
+
+function resetForm() {
+    $('#videoForm')[0].reset();
+    $('#videoId').val('');
+    $('#youtubeId').val('');
+    $('#modalTitle').text('Добавить ролик');
+    $('#deleteBtn').hide();
+}
+
+function editVideo(id) {
+    const videos = getVideos();
+    const v = videos.find(x => x.id === id);
+    if (!v) return;
+    $('#videoId').val(v.id);
+    $('#videoUrl').val(v.url);
+    $('#youtubeId').val(v.youtubeId);
+    $('#videoTitle').val(v.title);
+    $('#videoDesc').val(v.description);
+    $('#videoCategory').val(v.category);
+    $('#videoTags').val((v.tags || []).join(', '));
+    $('#modalTitle').text('Редактировать ролик');
+    $('#deleteBtn').show();
+    updateCategoryList();
+    const modal = new bootstrap.Modal(document.getElementById('videoModal'));
+    modal.show();
+}
+
+function saveVideo(e) {
+    e.preventDefault();
+    const id = $('#videoId').val();
+    const url = $('#videoUrl').val().trim();
+    const yid = $('#youtubeId').val().trim();
+    const title = $('#videoTitle').val().trim();
+    if (!yid || !title) {
+        alert('Заполните обязательные поля');
+        return;
+    }
+    const videos = getVideos();
+    const now = new Date().toISOString();
+    const tags = $('#videoTags').val().split(',').map(t => t.trim()).filter(t => t);
+
+    if (id) {
+        const idx = videos.findIndex(x => x.id === id);
+        if (idx !== -1) {
+            videos[idx] = { ...videos[idx], url, youtubeId: yid, title, description: $('#videoDesc').val(), category: $('#videoCategory').val(), tags, updatedAt: now };
+        }
+    } else {
+        videos.unshift({
+            id: Date.now().toString(),
+            url, youtubeId: yid, title,
+            description: $('#videoDesc').val(),
+            category: $('#videoCategory').val(),
+            tags,
+            addedAt: now,
+            updatedAt: now
+        });
+    }
+    saveVideos(videos);
+    bootstrap.Modal.getInstance(document.getElementById('videoModal')).hide();
+    renderTable();
+}
+
+function deleteCurrent() {
+    const id = $('#videoId').val();
+    if (!id) return;
+    if (!confirm('Удалить этот ролик из базы?')) return;
+    let videos = getVideos();
+    videos = videos.filter(x => x.id !== id);
+    saveVideos(videos);
+    bootstrap.Modal.getInstance(document.getElementById('videoModal')).hide();
+    renderTable();
+}
+
+function deleteVideo(id) {
+    if (!confirm('Удалить этот ролик из базы?')) return;
+    let videos = getVideos();
+    videos = videos.filter(x => x.id !== id);
+    saveVideos(videos);
+    renderTable();
+}
+
+// ---------- UI ----------
+
+function renderTable() {
+    const videos = getVideos();
+    const search = $('#searchInput').val().toLowerCase().trim();
+    const catFilter = $('#categoryFilter').val();
+
+    const filtered = videos.filter(v => {
+        const text = [v.title, v.description, v.youtubeId, (v.tags || []).join(' ')].join(' ').toLowerCase();
+        const matchSearch = !search || text.includes(search);
+        const matchCat = !catFilter || v.category === catFilter;
+        return matchSearch && matchCat;
+    });
+
+    $('#totalCount').text(filtered.length);
+    const tbody = $('#videosTable');
+    tbody.empty();
+
+    if (filtered.length === 0) {
+        $('#emptyState').show();
+        return;
+    }
+    $('#emptyState').hide();
+
+    filtered.forEach(v => {
+        const thumb = `https://img.youtube.com/vi/${v.youtubeId}/mqdefault.jpg`;
+        const tags = (v.tags || []).map(t => `<span class="badge bg-secondary tag-badge me-1">${escapeHtml(t)}</span>`).join('');
+        const date = v.addedAt ? new Date(v.addedAt).toLocaleDateString('ru-RU') : '';
+        const row = `
+            <tr>
+                <td><img src="${thumb}" class="video-thumbnail" alt="thumb" onerror="this.src='https://via.placeholder.com/120x90?text=No+Image'"></td>
+                <td>
+                    <div class="fw-semibold">${escapeHtml(v.title)}</div>
+                    <div class="small text-muted text-truncate" style="max-width:300px">${escapeHtml(v.description || '')}</div>
+                </td>
+                <td>${escapeHtml(v.category || '—')}</td>
+                <td>${tags}</td>
+                <td class="small text-muted">${date}</td>
+                <td class="text-end">
+                    <a href="https://www.youtube.com/watch?v=${v.youtubeId}" target="_blank" class="btn btn-sm btn-outline-primary" title="Открыть">
+                        <i class="bi bi-box-arrow-up-right"></i>
+                    </a>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="editVideo('${v.id}')" title="Редактировать">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteVideo('${v.id}')" title="Удалить">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+        tbody.append(row);
+    });
+
+    updateCategoryFilter();
+}
+
+function updateCategoryFilter() {
+    const videos = getVideos();
+    const cats = [...new Set(videos.map(v => v.category).filter(Boolean))].sort();
+    const current = $('#categoryFilter').val();
+    const sel = $('#categoryFilter');
+    sel.html('<option value="">Все категории</option>');
+    cats.forEach(c => {
+        sel.append(`<<option value="${escapeHtml(c)}" ${c === current ? 'selected' : ''}>${escapeHtml(c)}</option>`);
+    });
+}
+
+function updateCategoryList() {
+    const videos = getVideos();
+    const cats = [...new Set(videos.map(v => v.category).filter(Boolean))].sort();
+    const dl = $('#categoryList');
+    dl.empty();
+    cats.forEach(c => dl.append(`<<option value="${escapeHtml(c)}">`));
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ---------- Import / Export ----------
+
+function exportDB() {
+    const videos = getVideos();
+    const blob = new Blob([JSON.stringify(videos, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `youtube-db-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function importDB(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = JSON.parse(e.target.result);
+            if (!Array.isArray(data)) throw new Error('Файл должен содержать массив');
+            // Validate minimal structure
+            const valid = data.filter(x => x.youtubeId && x.title);
+            if (confirm(`Загрузить ${valid.length} роликов? Это заменит текущую базу.`)) {
+                saveVideos(valid);
+                renderTable();
+            }
+        } catch (err) {
+            alert('Ошибка импорта: ' + err.message);
+        }
+        input.value = '';
+    };
+    reader.readAsText(file);
+}
+
+// ---------- Init ----------
+
+$(function() {
+    renderTable();
+});
+</script>
+
+</body>
+</html>

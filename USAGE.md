@@ -105,3 +105,11 @@ llama-server \
 > 
 > 
 python3 /Users/user/PycharmProjects/VisionEmbed-CLI/style_dataset_selector.py --input-dir . --target-size 19 --output-json my_result.json
+
+
+
+python3 /Users/user/PycharmProjects/VisionEmbed-CLI/select_lora_dataset.py \
+    --input_dir . \
+    --num_images 19 \
+    --seed 42 \
+    --force
