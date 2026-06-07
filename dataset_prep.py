@@ -116,7 +116,6 @@ def load_and_filter_images(input_dir: str, min_size: int):
 # ==============================================================================
 
 def calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, ss_score):
-    # 1. Coverage & Entropy
     coverages = []
     selected_counts = {}
     for cid, meta in clusters_meta.items():
@@ -134,7 +133,6 @@ def calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, ss_score
         p = p[p > 0]
         ce = -np.sum(p * np.log(p))
 
-    # 2. Distance Metrics & DS
     ds, mean_pairwise, std_pairwise, mean_nn, intra_min_dist, soft_dup_pairs = 0.0, 0.0, 0.0, 0.0, 0.0, 0
 
     if N > 1:
@@ -154,10 +152,8 @@ def calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, ss_score
 
         ds = (mean_pairwise * mean_nn) / std_pairwise if std_pairwise > 0 else 0.0
 
-    # 3. Gini
     gini = calculate_gini(list(selected_counts.values()))
 
-    # 4. LoRA Readiness Score (LRS)
     norm_ds = min(ds / 0.35, 1.0)
     norm_gini = 1.0 - gini
     norm_cov = mean_coverage / 100.0
@@ -165,7 +161,6 @@ def calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, ss_score
 
     lrs = 0.3 * norm_ds + 0.25 * norm_gini + 0.25 * norm_cov + 0.2 * norm_ss
 
-    # Penalties
     if mean_coverage < 60.0:
         lrs *= 0.7
     elif mean_coverage < 70.0:
@@ -173,7 +168,6 @@ def calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, ss_score
 
     if intra_min_dist < 0.025 and N > 1: lrs *= 0.9
 
-    # Grade
     if lrs >= 0.80:
         grade = "🏆 GOOD"
     elif lrs >= 0.65:
@@ -189,10 +183,43 @@ def calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, ss_score
 
 
 # ==============================================================================
-# 4. ГЕНЕРАЦИЯ ОТЧЕТА
+# 4. ВЫБОР ОБЛОЖКИ (COVER IMAGE) — v5.2
 # ==============================================================================
 
-def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_meta, qs):
+def select_cover_image(sel_embs, sel_global_indices):
+    """
+    Выбирает изображение, максимально близкое к центру масс всех отобранных.
+    Возвращает индекс в sel_embs и расстояние до центра.
+    """
+    N = sel_embs.shape[0]
+    if N == 0:
+        return None, None
+
+    # Центр масс (сферический центроид)
+    centroid = np.mean(sel_embs, axis=0)
+    norm = np.linalg.norm(centroid)
+    if norm > 0:
+        centroid = centroid / norm
+    else:
+        centroid = np.zeros_like(centroid)
+
+    # Расстояния до центра
+    dists_to_center = 1.0 - (sel_embs @ centroid)
+    min_dist = np.min(dists_to_center)
+
+    # Tie-breaker: при равенстве расстояний — меньший глобальный индекс
+    candidates = np.where(np.abs(dists_to_center - min_dist) < 1e-6)[0]
+    global_indices_array = np.array(sel_global_indices)
+    cover_idx = candidates[np.argmin(global_indices_array[candidates])]
+
+    return int(cover_idx), float(min_dist)
+
+
+# ==============================================================================
+# 5. ГЕНЕРАЦИЯ ОТЧЕТА
+# ==============================================================================
+
+def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_meta, qs, cover_info):
     report = []
     sep = "=" * 60
     N = dist_matrix.shape[0]
@@ -201,10 +228,9 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
     report.append("LORA DATASET BENCHMARK REPORT")
     report.append(sep)
     report.append(f"Timestamp: {datetime.now().isoformat()}")
-    report.append(f"Utility Version: 5.0 (Advanced Metrics & LRS)")
+    report.append(f"Utility Version: 5.2 (Cover Image Selection)")
     report.append("")
 
-    # [1] - [4]
     report.append("[1. CONFIGURATION]")
     for k, v in vars(args).items(): report.append(f"{k:<22}: {v}")
     report.append("")
@@ -233,7 +259,6 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
         report.append(f"Std deviation          : {np.std(upper_dists):.6f}")
     report.append("")
 
-    # [5. QUALITY SCORES v5.0]
     report.append("[5. QUALITY SCORES v5.0]")
     report.append(f"Diversity Score (DS)       : {qs['ds']:.4f}")
     report.append(f"Coverage Entropy (CE)      : {qs['ce']:.4f}")
@@ -252,22 +277,38 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
     report.append(f"LoRA Readiness Score (LRS) : {qs['lrs']:.4f} [{qs['grade']}]")
     report.append("")
 
-    # [6] - [7]
-    report.append("[6. TSP PATH (FINAL ORDER)]")
-    report.append(f"{'Index':<7} | {'File (basename)':<40} | {'Cluster':<8}")
-    report.append("-" * 70)
-    for item in items_meta:
-        report.append(f"{item['index']:<7} | {item['file']:<40} | {item['cluster_id']:<8}")
+    # [6. COVER IMAGE] — новая секция
+    report.append("[6. COVER IMAGE]")
+    if cover_info:
+        report.append(f"File                  : {cover_info['file']}")
+        report.append(f"Cluster ID            : {cover_info['cluster_id']}")
+        report.append(f"Distance to centroid  : {cover_info['dist_to_center']:.6f}")
+        report.append(f"TSP Index             : {cover_info['tsp_index']}")
+        report.append(f"Original path         : {cover_info['original_path']}")
+    else:
+        report.append("(no cover selected)")
     report.append("")
 
-    report.append("[7. FILE INTEGRITY (SHA-256)]")
+    # [7. TSP PATH] — с маркером (COVER)
+    report.append("[7. TSP PATH (FINAL ORDER)]")
+    report.append(f"{'Index':<7} | {'File (basename)':<40} | {'Cluster':<8} | Note")
+    report.append("-" * 80)
+    for item in items_meta:
+        note = "(COVER)" if item.get('is_cover') else ""
+        report.append(f"{item['index']:<7} | {item['file']:<40} | {item['cluster_id']:<8} | {note}")
+    report.append("")
+
+    report.append("[8. FILE INTEGRITY (SHA-256)]")
     emb_path = os.path.join(out_dir, "embeddings.npy")
     dist_path = os.path.join(out_dir, "distance_matrix.npy")
     report.append(f"embeddings.npy      : {get_file_sha256(emb_path)}")
     report.append(f"distance_matrix.npy : {get_file_sha256(dist_path)}")
+    if cover_info:
+        cover_path = os.path.join(out_dir, cover_info['file'])
+        if os.path.exists(cover_path):
+            report.append(f"{cover_info['file']:<20}: {get_file_sha256(cover_path)}")
     report.append("")
 
-    # VISIONEMBED BENCHMARK
     report.append(sep)
     report.append("VISIONEMBED BENCHMARK")
     report.append(sep)
@@ -275,6 +316,8 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
     report.append(f"Images:    {N}")
     report.append(f"Embedding: 768-d CLIP ViT-L/14")
     report.append(f"Seed:      {args.seed}")
+    if cover_info:
+        report.append(f"Cover:     {cover_info['file']}")
     report.append("")
 
     report.append("METRICS (cosine distance, 1 - similarity)")
@@ -320,13 +363,13 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
 
 
 # ==============================================================================
-# 5. ОСНОВНОЙ ПАЙПЛАЙН
+# 6. ОСНОВНОЙ ПАЙПЛАЙН
 # ==============================================================================
 
 def run_pipeline(args):
     set_global_seed(args.seed)
     valid_data, total_found, broken_count, size_filtered_count = load_and_filter_images(args.input_dir, args.min_size)
-    if len(valid_data) < args.num_images:
+    if args.num_images is not None and len(valid_data) < args.num_images:
         raise ValueError(f"Найдено {len(valid_data)} валидных изображений, но запрошено {args.num_images}.")
 
     device = "cpu"
@@ -407,10 +450,31 @@ def run_pipeline(args):
                 clusters_meta[cid] = {"size": len(clean_members), "members": clean_members}
                 final_pool_indices.extend(clean_members)
 
-    if len(final_pool_indices) < args.num_images:
-        raise ValueError(f"После фильтраций осталось {len(final_pool_indices)} изобр., нужно {args.num_images}.")
+    if len(final_pool_indices) == 0:
+        raise ValueError("После всех фильтраций пул пуст. Невозможно сформировать датасет.")
 
-    N, C = args.num_images, len(clusters_meta)
+    # 🧮 АВТОПОДБОР N (Target Coverage Method)
+    if args.num_images is None:
+        target_coverage = 0.75
+        print(f"[INFO] 🧮 Автоподбор N (target coverage {int(target_coverage * 100)}%):")
+        auto_n = 0
+        for cid in sorted(clusters_meta.keys()):
+            meta = clusters_meta[cid]
+            take = max(1, int(meta["size"] * target_coverage))
+            print(f"       - Кластер {cid} ({meta['size']} шт.) → взять {take}")
+            auto_n += take
+
+        auto_n = max(10, auto_n)
+        auto_n = min(auto_n, len(final_pool_indices))
+
+        print(f"       → Оптимально: {auto_n} изображений")
+        N = auto_n
+    else:
+        N = args.num_images
+        if len(final_pool_indices) < N:
+            raise ValueError(f"После фильтраций осталось {len(final_pool_indices)} изобр., нужно {N}.")
+
+    C = len(clusters_meta)
     selected_indices = []
 
     if N < C:
@@ -455,6 +519,12 @@ def run_pipeline(args):
         used.add(nxt)
 
     ordered_selected_indices = [selected_indices[i] for i in path]
+
+    # 🎨 ВЫБОР ОБЛОЖКИ (Cover Image)
+    print(f"[INFO] 🎨 Выбор обложки (cover image)...")
+    cover_idx, cover_dist = select_cover_image(sel_embs, sel_global_indices)
+    print(f"[INFO] 🎨 Обложка: индекс в TSP = {cover_idx}, расстояние до центра = {cover_dist:.6f}")
+
     out_dir = os.path.join(args.input_dir, "selected")
     if os.path.exists(out_dir):
         if not args.force: raise FileExistsError(f"Папка {out_dir} существует. Используйте --force.")
@@ -464,14 +534,38 @@ def run_pipeline(args):
     items_meta, final_embs = [], []
     idx_to_cid = {m: cid for cid, meta in clusters_meta.items() for m in meta["members"]}
 
+    cover_info = None
+
     for i, dedup_idx in enumerate(ordered_selected_indices):
         global_idx, orig_path, _ = valid_data_dedup[dedup_idx]
         orig_name = Path(orig_path).name
         shutil.copy2(orig_path, os.path.join(out_dir, orig_name))
         final_embs.append(sel_embs[path[i]])
         cid = idx_to_cid.get(dedup_idx, -1)
-        items_meta.append({"index": i, "file": orig_name, "original_path": os.path.relpath(orig_path, args.input_dir),
-                           "cluster_id": int(cid), "cluster_size": int(clusters_meta[cid]["size"]) if cid != -1 else 0})
+
+        is_cover = (i == cover_idx)
+        item = {
+            "index": i,
+            "file": orig_name,
+            "original_path": os.path.relpath(orig_path, args.input_dir),
+            "cluster_id": int(cid),
+            "cluster_size": int(clusters_meta[cid]["size"]) if cid != -1 else 0,
+            "is_cover": is_cover
+        }
+        items_meta.append(item)
+
+        if is_cover:
+            # Создаём копию с именем cover.ext
+            ext = Path(orig_path).suffix
+            cover_filename = f"cover{ext}"
+            shutil.copy2(orig_path, os.path.join(out_dir, cover_filename))
+            cover_info = {
+                "file": cover_filename,
+                "cluster_id": int(cid),
+                "dist_to_center": cover_dist,
+                "tsp_index": i,
+                "original_path": os.path.relpath(orig_path, args.input_dir)
+            }
 
     E_final = np.vstack(final_embs).astype(np.float32)
     np.save(os.path.join(out_dir, "embeddings.npy"), E_final)
@@ -483,7 +577,6 @@ def run_pipeline(args):
     np.fill_diagonal(dist_matrix, 0.0)
     np.save(os.path.join(out_dir, "distance_matrix.npy"), dist_matrix)
 
-    # Расчёт Quality Scores
     qs = calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, best_score)
 
     stats = {
@@ -492,27 +585,31 @@ def run_pipeline(args):
         "Duplicates removed": duplicates_removed, "Valid after dedup": N_valid,
         "Noise removed": noise_removed if N_valid >= 4 else 0,
         "Outliers removed": outliers_removed if N_valid >= 4 else 0,
-        "Final pool size": len(final_pool_indices), "Target images (N)": args.num_images,
-        "Clusters found (C)": C
+        "Final pool size": len(final_pool_indices), "Target images (N)": N,
+        "Clusters found (C)": C, "N_selection_mode": "AUTO" if args.num_images is None else "MANUAL",
+        "Cover image": cover_info["file"] if cover_info else "none"
     }
 
     with open(os.path.join(out_dir, "embeddings_meta.json"), "w", encoding="utf-8") as f:
-        json.dump({"metadata": {"version": "5.0", "args": vars(args), "stats": stats}, "items": items_meta}, f,
-                  indent=2)
+        json.dump({"metadata": {"version": "5.2", "args": vars(args), "stats": stats, "cover": cover_info},
+                   "items": items_meta}, f, indent=2)
 
-    generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_meta, qs)
+    generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_meta, qs, cover_info)
 
-    print(f"[INFO] Результат: {out_dir} ({N} файлов)")
+    print(f"[INFO] Результат: {out_dir} ({N} файлов + обложка)")
     if qs['soft_dup_pairs'] > 0:
         print(
             f"[WARN] ⚠️ Обнаружено {qs['soft_dup_pairs']} пар soft-дубликатов (dist < 0.025). Рекомендуется ужесточить --dedup_threshold.")
     print(f"[INFO] 📊 LoRA Readiness Score (LRS): {qs['lrs']:.3f} ({qs['grade']})")
+    if cover_info:
+        print(f"[INFO] 🎨 Обложка датасета: {cover_info['file']}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dataset Benchmark Utility for LoRA (v5.0)")
+    parser = argparse.ArgumentParser(description="Dataset Benchmark Utility for LoRA (v5.2)")
     parser.add_argument("--input_dir", type=str, required=True)
-    parser.add_argument("--num_images", type=int, required=True)
+    parser.add_argument("--num_images", type=int, default=None,
+                        help="Если не указан, автоподбор по эвристике 75%% coverage")
     parser.add_argument("--min_size", type=int, default=512)
     parser.add_argument("--max_clusters", type=int, default=10)
     parser.add_argument("--seed", type=int, default=43)
