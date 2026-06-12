@@ -13,35 +13,31 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
-from tqdm import tqdm
-from transformers import CLIPModel, CLIPProcessor
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+import transformers
+import huggingface_hub
 
 # ==============================================================================
 # 1. LOGGING & VALIDATION
 # ==============================================================================
 
-logging.getLogger("transformers").setLevel(logging.ERROR)
-logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+transformers.logging.set_verbosity_error()
+huggingface_hub.logging.set_verbosity_error()
 logging.getLogger("PIL").setLevel(logging.ERROR)
 
-SYNTHETIC_PATTERN = re.compile(r"^(item_|file_|img_|sample_)\\d+", re.IGNORECASE)
+SYNTHETIC_PATTERN = re.compile(r"^(item_|file_|img_|sample_)\d+", re.IGNORECASE)
 
 
 def validate_filename(filename: str) -> bool:
-    if '/' in filename or '\\\\' in filename:
-        print(f"DEBUG: path separator in {filename}")
+    if '/' in filename or '\\' in filename:
         return False
     if SYNTHETIC_PATTERN.match(filename):
-        print(f"DEBUG: synthetic pattern matched {filename}")
         return False
-    if not re.match(r"^.+\.\w+$", filename):
-        print(f"DEBUG: regex failed for {filename}")
+    if not re.match(r"^.+\..+$", filename):
         return False
     parts = filename.split('.')
     if len(parts) > 2 and parts[-1].lower() == parts[-2].lower():
-        print(f"DEBUG: double extension {filename}")
         return False
     return True
 
@@ -51,18 +47,21 @@ def set_global_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def get_file_sha256(filepath):
     h = hashlib.sha256()
     with open(filepath, 'rb') as f:
-        for chunk in iter(lambda: f.read(8192), b""): h.update(chunk)
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
     return h.hexdigest()
 
 
 def calculate_gini(sizes):
-    if not sizes or sum(sizes) == 0: return 0.0
+    if not sizes or sum(sizes) == 0:
+        return 0.0
     n = len(sizes)
     sizes = np.array(sorted(sizes), dtype=float)
     index = np.arange(1, n + 1)
@@ -78,13 +77,15 @@ class UnionFind:
         self.parent = list(range(n))
 
     def find(self, i):
-        if self.parent[i] == i: return i
+        if self.parent[i] == i:
+            return i
         self.parent[i] = self.find(self.parent[i])
         return self.parent[i]
 
     def union(self, i, j):
         root_i, root_j = self.find(i), self.find(j)
-        if root_i != root_j: self.parent[root_i] = root_j
+        if root_i != root_j:
+            self.parent[root_i] = root_j
 
 
 def load_and_filter_images(input_dir: str, min_size: int):
@@ -96,15 +97,14 @@ def load_and_filter_images(input_dir: str, min_size: int):
         full_path = os.path.abspath(os.path.join(input_dir, f))
         if os.path.isfile(full_path) and Path(f).suffix.lower() in valid_extensions:
             if not validate_filename(f):
-                raise ValueError(
-                    "CRITICAL ERROR: File '" + f + "' has synthetic name. Original basename required.")
+                raise ValueError(f"CRITICAL ERROR: File '{f}' has synthetic name. Original basename required.")
             all_paths.append(full_path)
 
     all_paths.sort()
     valid_data, broken_count, size_filtered_count = [], 0, 0
 
     print(f"[INFO] Scanning (no recursion): {len(all_paths)} files found")
-    for idx, path in enumerate(tqdm(all_paths, desc="Filtering")):
+    for idx, path in enumerate(all_paths):
         try:
             with Image.open(path) as img:
                 w, h = img.size
@@ -174,7 +174,8 @@ def calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, ss_score
     elif mean_coverage < 70.0:
         lrs *= 0.85
 
-    if intra_min_dist < 0.025 and N > 1: lrs *= 0.9
+    if intra_min_dist < 0.025 and N > 1:
+        lrs *= 0.9
 
     if lrs >= 0.80:
         grade = "GOOD"
@@ -217,7 +218,7 @@ def select_cover_image(sel_embs, sel_global_indices):
 
 
 # ==============================================================================
-# 5. BENCHMARK REPORT
+# 5. BENCHMARK REPORT (text)
 # ==============================================================================
 
 def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_meta, qs, cover_info, strategy_comparison):
@@ -229,24 +230,25 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
     report.append("LORA DATASET BENCHMARK REPORT")
     report.append(sep)
     report.append(f"Timestamp: {datetime.now().isoformat()}")
-    report.append(f"Utility Version: 5.4 (Grid Search 15 Strategies)")
     report.append("")
 
     report.append("[1. CONFIGURATION]")
-    for k, v in vars(args).items(): report.append(f"{k:<22}: {v}")
+    for k, v in vars(args).items():
+        report.append(f"{k:<22}: {v}")
     report.append("")
 
     report.append("[2. PIPELINE STATISTICS]")
-    for k, v in stats.items(): report.append(f"{k:<25}: {v}")
+    for k, v in stats.items():
+        report.append(f"{k:<25}: {v}")
     report.append("")
 
     report.append("[3. STRATEGY GRID SEARCH (Auto-Selection)]")
     report.append(f"{'#':<4} | {'K offset':<10} | {'Mode':<13} | {'N':<5} | {'DS':<8} | {'Gini':<8} | {'Cov%':<8} | {'LRS':<8} | {'Grade':<12} | {'Status'}")
     report.append("-" * 115)
-    for idx, entry in enumerate(strategy_comparison, 1):
+    for entry in strategy_comparison:
         status = "SELECTED" if entry.get('selected', False) else ""
         report.append(
-            f"{idx:<4} | {entry['k_offset']:<10} | {entry['mode']:<13} | {entry['N']:<5} | "
+            f"{entry['strategy_idx']:<4} | {entry['k_offset']:<10} | {entry['mode']:<13} | {entry['N']:<5} | "
             f"{entry['ds']:<8.4f} | {entry['gini']:<8.4f} | {entry['mean_coverage']:<8.2f} | "
             f"{entry['lrs']:<8.4f} | {entry['grade']:<12} | {status}"
         )
@@ -261,36 +263,24 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
         report.append(f"{cid:<12} | {meta['size']:<8} | {sel_count:<10} | {coverage:<10.2f}")
     report.append("")
 
-    report.append("[5. VECTOR SPACE METRICS (Distance Matrix)]")
-    if N > 1:
-        i, j = np.triu_indices(N, k=1)
-        upper_dists = dist_matrix[i, j]
-        report.append(f"Mean pairwise distance : {np.mean(upper_dists):.6f}")
-        report.append(f"Median pairwise dist.  : {np.median(upper_dists):.6f}")
-        report.append(f"Min pairwise distance  : {np.min(upper_dists):.6f}")
-        report.append(f"Max pairwise distance  : {np.max(upper_dists):.6f}")
-        report.append(f"Std deviation          : {np.std(upper_dists):.6f}")
-    report.append("")
-
-    report.append("[6. QUALITY SCORES v5.0]")
+    report.append("[5. QUALITY SCORES v5.0]")
     report.append(f"Diversity Score (DS)       : {qs['ds']:.4f}")
     report.append(f"Coverage Entropy (CE)      : {qs['ce']:.4f}")
     report.append(f"Silhouette Score (SS)      : {qs['ss']:.4f}")
     report.append(f"Cluster Balance (Gini)     : {qs['gini']:.4f}")
     report.append(f"Mean Coverage              : {qs['mean_coverage']:.2f}%")
-
     min_dist_str = f"{qs['intra_min_dist']:.4f}"
-    if qs['intra_min_dist'] < 0.025 and N > 1: min_dist_str += " WARN"
+    if qs['intra_min_dist'] < 0.025 and N > 1:
+        min_dist_str += " WARN"
     report.append(f"Intra-cluster Min Distance : {min_dist_str}")
-
     dup_str = f"{qs['soft_dup_pairs']} pairs"
-    if qs['soft_dup_pairs'] > 0: dup_str += " WARN"
+    if qs['soft_dup_pairs'] > 0:
+        dup_str += " WARN"
     report.append(f"Soft Duplicates Found      : {dup_str}")
-
     report.append(f"LoRA Readiness Score (LRS) : {qs['lrs']:.4f} [{qs['grade']}]")
     report.append("")
 
-    report.append("[7. COVER IMAGE]")
+    report.append("[6. COVER IMAGE]")
     if cover_info:
         report.append(f"File                  : {cover_info['file']}")
         report.append(f"Cluster ID            : {cover_info['cluster_id']}")
@@ -299,25 +289,6 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
         report.append(f"Original path         : {cover_info['original_path']}")
     else:
         report.append("(no cover selected)")
-    report.append("")
-
-    report.append("[8. TSP PATH (FINAL ORDER)]")
-    report.append(f"{'Index':<7} | {'File (basename)':<40} | {'Cluster':<8} | Note")
-    report.append("-" * 80)
-    for item in items_meta:
-        note = "(COVER)" if item.get('is_cover') else ""
-        report.append(f"{item['index']:<7} | {item['file']:<40} | {item['cluster_id']:<8} | {note}")
-    report.append("")
-
-    report.append("[9. FILE INTEGRITY (SHA-256)]")
-    emb_path = os.path.join(out_dir, "embeddings.npy")
-    dist_path = os.path.join(out_dir, "distance_matrix.npy")
-    report.append(f"embeddings.npy      : {get_file_sha256(emb_path)}")
-    report.append(f"distance_matrix.npy : {get_file_sha256(dist_path)}")
-    if cover_info:
-        cover_path = os.path.join(out_dir, cover_info['file'])
-        if os.path.exists(cover_path):
-            report.append(f"{cover_info['file']:<20}: {get_file_sha256(cover_path)}")
     report.append("")
 
     report.append(sep)
@@ -330,10 +301,11 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
     if cover_info:
         report.append(f"Cover:     {cover_info['file']}")
     report.append("")
-
     report.append("METRICS (cosine distance, 1 - similarity)")
     report.append("----------------------------------------")
     if N > 1:
+        i, j = np.triu_indices(N, k=1)
+        upper_dists = dist_matrix[i, j]
         report.append(f"Mean pairwise distance:     {np.mean(upper_dists):.4f}")
         report.append(f"Std pairwise distance:      {np.std(upper_dists):.4f}")
         report.append(f"Min distance:               {np.min(upper_dists):.4f}")
@@ -355,70 +327,44 @@ def generate_benchmark(out_dir, args, stats, clusters_meta, dist_matrix, items_m
         report.append(f"  Cluster {cid}: {selected_counts[cid]} images")
     report.append("")
 
-    report.append("DISTANCE MATRIX")
-    report.append("----------------------------------------")
-    names = [item['file'] for item in items_meta]
-    if names:
-        max_len = max(len(n) for n in names)
-        col_width = max(max_len, 10) + 2
-        header = " " * col_width
-        for n in names: header += f"{n:<{col_width}}"
-        report.append(header)
-        for i, n_row in enumerate(names):
-            row_str = f"{n_row:<{col_width}}"
-            for j in range(N): row_str += f"{dist_matrix[i, j]:<{col_width}.4f}"
-            report.append(row_str)
-
     with open(os.path.join(out_dir, "benchmark.txt"), "w", encoding="utf-8") as f:
-        f.write("\\n".join(report))
+        f.write("\n".join(report))
 
 
 # ==============================================================================
-# 6. QUOTA DISTRIBUTION
+# 6. QUOTA DISTRIBUTION (с поддержкой log и inverse)
 # ==============================================================================
 
 def compute_quotas(clusters_meta, N, mode):
-    """
-    Вычисляет квоты выборки из каждого кластера.
-
-    Аргументы:
-        clusters_meta (dict): {cid: {"size": int, "members": list, "center": np.ndarray}}
-        N (int): общее количество изображений для выборки
-        mode (str): "proportional", "uniform" или "sqrt" - способ распределения
-
-    Возвращает:
-        dict: {cid: quota}
-    """
     C = len(clusters_meta)
     if C == 0:
         return {}
 
-    # Инициализация квот нулями
     quotas = {cid: 0 for cid in clusters_meta}
 
-    # Если N меньше или равно количеству кластеров, берём по одному из топ N кластеров
     if N <= C:
         sorted_cids = sorted(clusters_meta.keys(), key=lambda c: (-clusters_meta[c]["size"], c))
         for cid in sorted_cids[:N]:
             quotas[cid] = 1
         return quotas
 
-    # Сначала даём каждому кластеру по 1
     for cid in clusters_meta:
         quotas[cid] = 1
     remaining = N - C
 
-    # Расчёт весов для оставшихся мест в зависимости от mode
     if mode == "uniform":
         weights = {cid: 1.0 for cid in clusters_meta}
     elif mode == "sqrt":
         weights = {cid: np.sqrt(meta["size"]) for cid, meta in clusters_meta.items()}
+    elif mode == "log":
+        weights = {cid: np.log1p(meta["size"]) for cid, meta in clusters_meta.items()}
+    elif mode == "inverse":
+        weights = {cid: 1.0 / max(1, meta["size"]) for cid, meta in clusters_meta.items()}
     else:  # "proportional"
         weights = {cid: float(meta["size"]) for cid, meta in clusters_meta.items()}
 
     total_weight = sum(weights.values())
 
-    # Распределяем оставшиеся места пропорционально весам (целая часть)
     adds = {}
     for cid in clusters_meta:
         raw = remaining * (weights[cid] / total_weight)
@@ -427,41 +373,31 @@ def compute_quotas(clusters_meta, N, mode):
     for cid in clusters_meta:
         quotas[cid] += adds[cid]
 
-    # Ограничиваем квоты размером кластера
     for cid in clusters_meta:
         if quotas[cid] > clusters_meta[cid]["size"]:
             quotas[cid] = clusters_meta[cid]["size"]
 
     remaining_slots = N - sum(quotas.values())
 
-    # Если остались незаполненные места, добираем по принципу близости к глобальному центру
     if remaining_slots > 0:
-        # Формируем матрицу центров кластеров (C x d)
         centers = np.array([clusters_meta[cid]["center"] for cid in clusters_meta])
-        # Глобальный центр (средний вектор)
         global_center = np.mean(centers, axis=0)
-        norm_global = np.linalg.norm(global_center)
-        if norm_global > 0:
-            global_center = global_center / norm_global
+        norm_gc = np.linalg.norm(global_center)
+        if norm_gc > 0:
+            global_center /= norm_gc
 
-        # Расстояние (косинусное) от центра каждого кластера до глобального центра
         dists_to_global = {}
         for cid, meta in clusters_meta.items():
-            c_center = meta["center"]
-            # Скалярное произведение двух векторов -> скаляр
-            sim = np.dot(c_center, global_center)
-            # Приводим к скаляру, если результат оказался массивом (на всякий случай)
+            sim = np.dot(meta["center"], global_center)
             if hasattr(sim, "item"):
                 sim = sim.item()
             dists_to_global[cid] = 1.0 - sim
 
-        # Сортируем кластеры: сначала те, у которых больше свободных мест,
-        # затем ближе к глобальному центру (меньше расстояние)
         sorted_cids = sorted(
             clusters_meta.keys(),
             key=lambda c: (
-                -(clusters_meta[c]["size"] - quotas[c]),  # сначала те, кто может ещё взять
-                dists_to_global[c],  # потом по близости к центру
+                -(clusters_meta[c]["size"] - quotas[c]),
+                dists_to_global[c],
                 c
             )
         )
@@ -478,7 +414,6 @@ def compute_quotas(clusters_meta, N, mode):
 
 
 def build_selection_for_mode(clusters_meta, N, mode, valid_data_dedup, seed):
-    """Builds a candidate selection for a given strategy and returns metrics."""
     random.seed(seed)
     np.random.seed(seed)
 
@@ -510,7 +445,6 @@ def build_selection_for_mode(clusters_meta, N, mode, valid_data_dedup, seed):
 
     ordered_selected_indices = [selected_indices[i] for i in path]
 
-    # Build items_meta for metrics
     idx_to_cid = {m: cid for cid, meta in clusters_meta.items() for m in meta["members"]}
     items_meta = []
     for i, dedup_idx in enumerate(ordered_selected_indices):
@@ -521,7 +455,6 @@ def build_selection_for_mode(clusters_meta, N, mode, valid_data_dedup, seed):
             "cluster_size": int(clusters_meta[cid]["size"]) if cid != -1 else 0,
         })
 
-    # Compute distance matrix
     final_embs = sel_embs[path]
     E_final = np.vstack(final_embs).astype(np.float32)
     dist_matrix = np.zeros((N, N), dtype=np.float32)
@@ -530,11 +463,11 @@ def build_selection_for_mode(clusters_meta, N, mode, valid_data_dedup, seed):
         dist_matrix[i:min(i + 512, N)] = np.clip(1.0 - (chunk @ E_final.T), 0.0, 2.0)
     np.fill_diagonal(dist_matrix, 0.0)
 
-    # Dummy ss_score (same for all strategies since clustering is fixed)
     ss_score = 0.0
 
     qs = calculate_quality_scores(N, dist_matrix, clusters_meta, items_meta, ss_score)
 
+    # Добавляем clusters_meta в возвращаемый словарь
     return {
         "mode": mode,
         "N": N,
@@ -553,11 +486,86 @@ def build_selection_for_mode(clusters_meta, N, mode, valid_data_dedup, seed):
         "grade": qs["grade"],
         "soft_dup_pairs": qs["soft_dup_pairs"],
         "intra_min_dist": qs["intra_min_dist"],
+        "clusters_meta": clusters_meta   # <-- добавлено
     }
 
 
 # ==============================================================================
-# 7. MAIN PIPELINE
+# 7. КОНСОЛЬНЫЙ ВЫВОД (структурированный)
+# ==============================================================================
+
+def print_structured_summary(stats, clusters_meta, items_meta, qs, best_strategy, cover_info, all_strategies, args):
+    """Печатает в консоль структурированный отчёт без JSON-файлов."""
+    sep = "=" * 70
+    print("\n" + sep)
+    print("STRUCTURED PIPELINE SUMMARY".center(70))
+    print(sep)
+
+    # 1. Конфигурация
+    print("\n[CONFIGURATION]")
+    for k, v in vars(args).items():
+        print(f"  {k:<20}: {v}")
+
+    # 2. Статистика
+    print("\n[STATISTICS]")
+    for k, v in stats.items():
+        print(f"  {k:<25}: {v}")
+
+    # 3. Лучшая стратегия
+    print("\n[BEST STRATEGY]")
+    print(f"  Strategy index      : #{best_strategy['strategy_idx']}")
+    print(f"  K offset            : {best_strategy.get('k_offset', 'N/A')}")
+    print(f"  Target K            : {best_strategy.get('target_k', 'N/A')}")
+    print(f"  Mode                : {best_strategy['mode'].upper()}")
+    print(f"  N (selected images) : {best_strategy['N']}")
+    print(f"  LRS                 : {best_strategy['lrs']:.4f} ({best_strategy['grade']})")
+    print(f"  DS                  : {best_strategy['ds']:.4f}")
+    print(f"  Gini                : {best_strategy['gini']:.4f}")
+    print(f"  Mean coverage       : {best_strategy['mean_coverage']:.1f}%")
+    print(f"  Soft duplicate pairs: {best_strategy['soft_dup_pairs']}")
+
+    # 4. Качество
+    print("\n[QUALITY SCORES]")
+    print(f"  LRS (LoRA Readiness) : {qs['lrs']:.4f} [{qs['grade']}]")
+    print(f"  DS (Diversity)       : {qs['ds']:.4f}")
+    print(f"  CE (Coverage Entropy): {qs['ce']:.4f}")
+    print(f"  SS (Silhouette)      : {qs['ss']:.4f}")
+    print(f"  Gini (Balance)       : {qs['gini']:.4f}")
+    print(f"  Mean coverage        : {qs['mean_coverage']:.2f}%")
+    print(f"  Intra-min distance   : {qs['intra_min_dist']:.4f}")
+    print(f"  Soft duplicate pairs : {qs['soft_dup_pairs']}")
+
+    # 5. Кластеры
+    print("\n[CLUSTERS]")
+    print(f"  {'ID':<4} | {'Size':<6} | {'Selected':<8} | {'Coverage %':<10}")
+    print("  " + "-" * 35)
+    for cid, meta in sorted(clusters_meta.items()):
+        sel_count = sum(1 for item in items_meta if item['cluster_id'] == cid)
+        coverage = (sel_count / meta['size'] * 100) if meta['size'] > 0 else 0
+        print(f"  {cid:<4} | {meta['size']:<6} | {sel_count:<8} | {coverage:<10.2f}")
+
+    # 6. Cover image
+    if cover_info:
+        print("\n[COVER IMAGE]")
+        print(f"  File          : {cover_info['file']}")
+        print(f"  Cluster ID    : {cover_info['cluster_id']}")
+        print(f"  Distance to centroid: {cover_info['dist_to_center']:.6f}")
+        print(f"  TSP index     : {cover_info['tsp_index']}")
+        print(f"  Original path : {cover_info['original_path']}")
+
+    # 7. Краткая таблица всех стратегий (топ-5 по LRS)
+    print("\n[ALL STRATEGIES (top 5 by LRS)]")
+    sorted_strategies = sorted(all_strategies, key=lambda x: x['lrs'], reverse=True)[:5]
+    print(f"  {'#':<4} | {'K offset':<10} | {'Mode':<13} | {'N':<5} | {'LRS':<8} | {'Grade':<12}")
+    print("  " + "-" * 65)
+    for s in sorted_strategies:
+        print(f"  {s['strategy_idx']:<4} | {s['k_offset']:<10} | {s['mode']:<13} | {s['N']:<5} | {s['lrs']:<8.4f} | {s['grade']:<12}")
+
+    print(sep + "\n")
+
+
+# ==============================================================================
+# 8. MAIN PIPELINE
 # ==============================================================================
 
 def run_pipeline(args):
@@ -567,12 +575,15 @@ def run_pipeline(args):
         raise ValueError(f"Found {len(valid_data)} valid images, but {args.num_images} requested.")
 
     device = "cpu"
-    model = CLIPModel.from_pretrained("laion/CLIP-ViT-L-14-laion2B-s32B-b82K", torch_dtype=torch.float32).to(device)
-    processor = CLIPProcessor.from_pretrained("laion/CLIP-ViT-L-14-laion2B-s32B-b82K")
+    model = transformers.CLIPModel.from_pretrained(
+        "laion/CLIP-ViT-L-14-laion2B-s32B-b82K",
+        torch_dtype=torch.float32
+    ).to(device)
+    processor = transformers.CLIPProcessor.from_pretrained("laion/CLIP-ViT-L-14-laion2B-s32B-b82K")
     model.eval()
 
     embeddings = []
-    pbar = tqdm(total=len(valid_data), desc="Vectorization")
+    print("[INFO] Vectorization started...")
     with torch.no_grad():
         for i in range(0, len(valid_data), args.batch_size):
             batch_data = valid_data[i:i + args.batch_size]
@@ -587,8 +598,7 @@ def run_pipeline(args):
                 feats = getattr(feats, 'pooler_output', getattr(feats, 'image_embeds', None))
             feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
             embeddings.append(feats.cpu().numpy())
-            pbar.update(len(batch_data))
-    pbar.close()
+    print("[INFO] Vectorization completed.")
     E = np.vstack(embeddings).astype(np.float32)
 
     # Deduplication
@@ -597,9 +607,11 @@ def run_pipeline(args):
     for i in range(0, N, 1024):
         for j in range(i, N, 1024):
             sim = E[i:min(i + 1024, N)] @ E[j:min(j + 1024, N)].T
-            if i == j: np.fill_diagonal(sim, -1.0)
+            if i == j:
+                np.fill_diagonal(sim, -1.0)
             rows, cols = np.where(sim >= args.dedup_threshold)
-            for r, c in zip(rows, cols): uf.union(i + r, j + c)
+            for r, c in zip(rows, cols):
+                uf.union(i + r, j + c)
 
     groups = {}
     for i in range(N):
@@ -620,16 +632,19 @@ def run_pipeline(args):
         clusters_meta[0] = {"size": N_valid, "members": final_pool_indices, "center": np.mean(E_dedup, axis=0)}
     else:
         max_k = min(args.max_clusters, N_valid // 2)
-        if max_k < 2: max_k = 2
+        if max_k < 2:
+            max_k = 2
         best_k = 2
         for k in range(2, max_k + 1):
             labels = KMeans(n_clusters=k, random_state=args.seed, n_init=10).fit_predict(E_dedup)
             score = silhouette_score(E_dedup, labels)
-            if score > best_score: best_score, best_k = score, k
+            if score > best_score:
+                best_score, best_k = score, k
 
         labels = KMeans(n_clusters=best_k, random_state=args.seed, n_init=10).fit_predict(E_dedup)
         clusters = {i: [] for i in range(best_k)}
-        for idx, lbl in enumerate(labels): clusters[lbl].append(idx)
+        for idx, lbl in enumerate(labels):
+            clusters[lbl].append(idx)
 
         valid_clusters = {cid: m for cid, m in clusters.items() if len(m) >= args.min_cluster_size}
         noise_removed = sum(len(m) for cid, m in clusters.items() if len(m) < args.min_cluster_size)
@@ -654,7 +669,7 @@ def run_pipeline(args):
 
     # AUTO N
     if args.num_images is None:
-        print(f"[INFO] Auto N selection (adaptive coverage):")
+        print("[INFO] Auto N selection (adaptive coverage):")
         auto_n = 0
         for cid in sorted(clusters_meta.keys()):
             size = clusters_meta[cid]["size"]
@@ -680,35 +695,38 @@ def run_pipeline(args):
     C = len(clusters_meta)
 
     # ================================================================
-    # GRID SEARCH: 15 STRATEGIES
+    # GRID SEARCH: offsets -3..+3, 5 modes
     # ================================================================
-    # K offsets: -2, -1, 0, +1, +2 (relative to detected C)
-    # Modes: proportional, uniform, sqrt
-    # Total: 5 x 3 = 15 combinations
-    # ================================================================
+    k_offsets = [-3, -2, -1, 0, 1, 2, 3]
+    modes = ["proportional", "uniform", "sqrt", "log", "inverse"]
 
-    k_offsets = [-2, -1, 0, 1, 2]
-    modes = ["proportional", "uniform", "sqrt"]
-
-    print(f"[INFO] Grid search: 15 strategies (K offsets: {k_offsets}, modes: {modes})")
+    print(f"[INFO] Grid search: {len(k_offsets) * len(modes)} strategies (K offsets: {k_offsets}, modes: {modes})")
     print(f"       Base clusters detected: {C}")
 
     candidates = []
     strategy_idx = 0
 
+    valid_data_dedup = []
+    for i, (gidx, path, size) in enumerate(valid_data_dedup_raw):
+        valid_data_dedup.append({
+            "global_idx": gidx,
+            "path": path,
+            "size": size,
+            "emb": E_dedup[i]
+        })
+
     for k_off in k_offsets:
         target_k = C + k_off
-        # Clamp target_k to valid range
         target_k = max(2, min(target_k, args.max_clusters))
         target_k = min(target_k, N_valid // 2)
         if target_k < 2:
             target_k = 2
 
-        # Re-cluster with target_k if different from best_k
         if target_k != best_k and N_valid >= 4:
             labels = KMeans(n_clusters=target_k, random_state=args.seed, n_init=10).fit_predict(E_dedup)
             new_clusters = {i: [] for i in range(target_k)}
-            for idx, lbl in enumerate(labels): new_clusters[lbl].append(idx)
+            for idx, lbl in enumerate(labels):
+                new_clusters[lbl].append(idx)
 
             new_valid_clusters = {cid: m for cid, m in new_clusters.items() if len(m) >= args.min_cluster_size}
             new_clusters_meta = {}
@@ -737,20 +755,9 @@ def run_pipeline(args):
         if current_C == 0:
             continue
 
-        # Adjust N if pool is smaller
         current_N = min(N, current_pool_size)
         if current_N < 2:
             continue
-
-        # Pre-build valid_data_dedup with embeddings for selection
-        valid_data_dedup = []
-        for i, (gidx, path, size) in enumerate(valid_data_dedup_raw):
-            valid_data_dedup.append({
-                "global_idx": gidx,
-                "path": path,
-                "size": size,
-                "emb": E_dedup[i]
-            })
 
         for mode in modes:
             strategy_idx += 1
@@ -770,7 +777,6 @@ def run_pipeline(args):
     if not candidates:
         raise ValueError("No valid strategies found after grid search.")
 
-    # Select best by LRS (primary), then by DS, then by coverage
     candidates_sorted = sorted(
         candidates,
         key=lambda x: (x['lrs'], x['ds'], x['mean_coverage']),
@@ -781,23 +787,19 @@ def run_pipeline(args):
 
     print(f"[INFO] BEST STRATEGY: #{best['strategy_idx']}  K={best['target_k']}  {best['mode'].upper()}  LRS={best['lrs']:.4f}")
 
-    # Build strategy comparison table for report
-    strategy_comparison = []
+    # Формируем список всех стратегий для консольного вывода (без 'selected')
+    all_strategies = []
     for c in candidates:
-        strategy_comparison.append({
+        all_strategies.append({
             "strategy_idx": c["strategy_idx"],
             "k_offset": f"{c['k_offset']:+d} (K={c['target_k']})",
             "mode": c["mode"],
             "N": c["N"],
-            "ds": c["ds"],
-            "gini": c["gini"],
-            "mean_coverage": c["mean_coverage"],
             "lrs": c["lrs"],
             "grade": c["grade"],
-            "selected": c.get("selected", False),
         })
 
-    # Use best strategy's data for final output
+    # Используем лучшую стратегию для финального вывода
     ordered_selected_indices = best["ordered_indices"]
     sel_embs = best["sel_embs"]
     sel_global_indices = best["sel_global_indices"]
@@ -805,17 +807,18 @@ def run_pipeline(args):
     items_meta = best["items_meta"]
     dist_matrix = best["dist_matrix"]
     E_final = best["E_final"]
-    best_clusters_meta = best.get("clusters_meta", clusters_meta)
+    best_clusters_meta = best["clusters_meta"]   # теперь ключ существует
     qs = calculate_quality_scores(best["N"], dist_matrix, best_clusters_meta, items_meta, best_score)
 
-    # COVER IMAGE
-    print(f"[INFO] Selecting cover image...")
+    # Cover image
+    print("[INFO] Selecting cover image...")
     cover_idx, cover_dist = select_cover_image(sel_embs, sel_global_indices)
     print(f"[INFO] Cover: TSP index = {cover_idx}, distance to center = {cover_dist:.6f}")
 
     out_dir = os.path.join(args.input_dir, "selected")
     if os.path.exists(out_dir):
-        if not args.force: raise FileExistsError(f"Folder {out_dir} exists. Use --force.")
+        if not args.force:
+            raise FileExistsError(f"Folder {out_dir} exists. Use --force.")
         shutil.rmtree(out_dir)
     os.makedirs(out_dir)
 
@@ -869,10 +872,29 @@ def run_pipeline(args):
     }
 
     with open(os.path.join(out_dir, "embeddings_meta.json"), "w", encoding="utf-8") as f:
-        json.dump({"metadata": {"version": "5.4-grid", "args": vars(args), "stats": stats, "cover": cover_info},
+        json.dump({"metadata": {"version": "5.4-grid-extended", "args": vars(args), "stats": stats, "cover": cover_info},
                    "items": final_items_meta}, f, indent=2)
 
-    generate_benchmark(out_dir, args, stats, best_clusters_meta, dist_matrix, final_items_meta, qs, cover_info, strategy_comparison)
+    # Сохраняем текстовый отчёт benchmark.txt
+    # Подготовим список словарей для generate_benchmark
+    benchmark_strategies = []
+    for c in candidates:
+        benchmark_strategies.append({
+            "strategy_idx": c["strategy_idx"],
+            "k_offset": f"{c['k_offset']:+d} (K={c['target_k']})",
+            "mode": c["mode"],
+            "N": c["N"],
+            "ds": c.get("ds", 0),
+            "gini": c.get("gini", 0),
+            "mean_coverage": c.get("mean_coverage", 0),
+            "lrs": c["lrs"],
+            "grade": c["grade"],
+            "selected": c.get("selected", False)
+        })
+    generate_benchmark(out_dir, args, stats, best_clusters_meta, dist_matrix, final_items_meta, qs, cover_info, benchmark_strategies)
+
+    # Структурированный вывод в консоль
+    print_structured_summary(stats, best_clusters_meta, final_items_meta, qs, best, cover_info, all_strategies, args)
 
     print(f"[INFO] Result: {out_dir} ({best['N']} files + cover)")
     if qs['soft_dup_pairs'] > 0:
@@ -883,10 +905,10 @@ def run_pipeline(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dataset Benchmark Utility for LoRA (v5.4 Grid Search)")
+    parser = argparse.ArgumentParser(description="Dataset Benchmark Utility for LoRA (v5.4 Grid Search, extended)")
     parser.add_argument("--input_dir", type=str, required=True)
     parser.add_argument("--num_images", type=int, default=None,
-                        help="If not set, auto-select by 75%% coverage heuristic")
+                        help="If not set, auto-select by coverage heuristic")
     parser.add_argument("--min_size", type=int, default=512)
     parser.add_argument("--max_clusters", type=int, default=10)
     parser.add_argument("--seed", type=int, default=43)
@@ -896,7 +918,8 @@ def main():
     parser.add_argument("--dedup_threshold", type=float, default=0.99)
     parser.add_argument("--outlier_percentile", type=float, default=95.0)
     args = parser.parse_args()
-    if not os.path.isdir(args.input_dir): raise FileExistsError(f"Directory {args.input_dir} not found.")
+    if not os.path.isdir(args.input_dir):
+        raise FileExistsError(f"Directory {args.input_dir} not found.")
     run_pipeline(args)
 
 
