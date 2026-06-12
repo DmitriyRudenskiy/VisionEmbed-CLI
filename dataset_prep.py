@@ -453,17 +453,26 @@ def run_pipeline(args):
     if len(final_pool_indices) == 0:
         raise ValueError("После всех фильтраций пул пуст. Невозможно сформировать датасет.")
 
-    # 🧮 АВТОПОДБОР N (Target Coverage Method)
+    # 🧮 АВТОПОДБОР N (Adaptive Target Coverage Method v5.3)
     if args.num_images is None:
-        target_coverage = 0.75
-        print(f"[INFO] 🧮 Автоподбор N (target coverage {int(target_coverage * 100)}%):")
+        print(f"[INFO] 🧮 Автоподбор N (адаптивное покрытие):")
         auto_n = 0
         for cid in sorted(clusters_meta.keys()):
-            meta = clusters_meta[cid]
-            take = max(1, int(meta["size"] * target_coverage))
-            print(f"       - Кластер {cid} ({meta['size']} шт.) → взять {take}")
+            size = clusters_meta[cid]["size"]
+
+            # Адаптивная эвристика на основе размера кластера
+            if size <= 5:
+                target_cov = 0.90
+            elif size <= 15:
+                target_cov = 0.80
+            else:
+                target_cov = 0.70
+
+            take = max(1, int(size * target_cov))
+            print(f"       - Кластер {cid} ({size} шт., cov={int(target_cov * 100)}%) → взять {take}")
             auto_n += take
 
+        # Защитные границы
         auto_n = max(10, auto_n)
         auto_n = min(auto_n, len(final_pool_indices))
 
